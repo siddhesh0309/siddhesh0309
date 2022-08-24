@@ -1,8 +1,6 @@
 <h1 align="center">Hi 👋, I'm Siddhesh Parkhe</h1>
 <h3 align="center">A passionate developer from India</h3>
-
-<img align="right" alt="coding" width="400" src="![image](https://user-images.githubusercontent.com/66249282/186483750-88273277-d7b2-426b-b3fd-b58dd79e2013.png)
-">
+<img align="right" alt="coding" width="400" src="https://user-images.githubusercontent.com/55389276/140866485-8fb1c876-9a8f-4d6a-98dc-08c4981eaf70.gif">
 
 <p align="left"> <img src="https://komarev.com/ghpvc/?username=siddhesh0309&label=Profile%20views&color=0e75b6&style=flat" alt="siddhesh0309" /> </p>
 
