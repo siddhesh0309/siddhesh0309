@@ -9,7 +9,7 @@
 
 - 🔭 I’m currently working on **Web development and Android!!!**
 
-- 🌱 I’m currently learning **Flutter**
+- 🌱 I’m currently learning **WordPress**
 
 - 👯 I’m looking to collaborate with **Developers!!**
 
