@@ -1,0 +1,13 @@
+df_template.loc[
+    (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+    (df_template[tin_col].isin(c_list)) &
+    (df_template[issuing_cols].apply(lambda x: set(x) <= {'', 'IN'}, axis=1)),
+    "OCC_DESC_DEC23"
+] = ''
+
+df_template.loc[
+    (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+    (df_template[tin_col].isin(c_list)) &
+    ~(df_template[issuing_cols].apply(lambda x: set(x) <= {'', 'IN'}, axis=1)),
+    "OCC_DESC_DEC23"
+] = 'Tin NA'
