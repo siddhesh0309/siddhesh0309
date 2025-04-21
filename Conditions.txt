@@ -1,0 +1,52 @@
+tin_cols_all = [f'TIN_Issuing_Country' if i == 1 else f'TIN_Issuing_Country{i}' for i in range(1, 9)]
+
+for i in range(1, 9):
+    ftin_col = 'Foreign_TIN' if i == 1 else f'Foreign_TIN{i}'
+    tin_col = 'TIN_Issuing_Country' if i == 1 else f'TIN_Issuing_Country{i}'
+
+    # 1. IN only
+    df_template.loc[
+        (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+        (df_template[tin_col].str.contains("IN")),
+        "OCC_DESC_DEC23"
+    ] = "Tin NA"
+
+    # 2. IN + other from clist
+    df_template.loc[
+        (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+        (df_template[tin_col].str.contains("IN")) &
+        (df_template[tin_col].isin(clist)),
+        "OCC_DESC_DEC23"
+    ] = "DOES NOT ISSUE TIN"
+
+    # 3. IN + other not in clist
+    df_template.loc[
+        (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+        (df_template[tin_col].str.contains("IN")) &
+        (~df_template[tin_col].isin(clist)),
+        "OCC_DESC_DEC23"
+    ] = ""
+
+# 4. Multiple from clist (>=2) → ISSUE TIN
+df_template["clist_count"] = df_template[tin_cols_all].apply(
+    lambda row: sum(str(val).strip() in clist for val in row),
+    axis=1
+)
+df_template.loc[
+    (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+    (df_template["clist_count"] > 1),
+    "OCC_DESC_DEC23"
+] = "ISSUE TIN"
+
+# 5. Mixed countries (some from clist, some not) → blank
+def is_mixed_country(row):
+    present = [str(val).strip() for val in row if str(val).strip()]
+    from_list = [c for c in present if c in clist]
+    not_from_list = [c for c in present if c not in clist]
+    return len(from_list) > 0 and len(not_from_list) > 0
+
+df_template.loc[
+    (df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) &
+    df_template[tin_cols_all].apply(is_mixed_country, axis=1),
+    "OCC_DESC_DEC23"
+] = ""
