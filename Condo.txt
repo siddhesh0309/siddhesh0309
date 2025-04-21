@@ -11,3 +11,13 @@ df_template.loc[
     ~(df_template[issuing_cols].apply(lambda x: set(x) <= {'', 'IN'}, axis=1)),
     "OCC_DESC_DEC23"
 ] = 'Tin NA'
+
+(df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) & 
+(df_template[tin_col].isin(c_list)) & 
+(df_template[tin_cols].apply(lambda x: set(str(i).strip().upper() for i in x if str(i).strip()) == {"IN"}, axis=1))
+
+
+
+
+
+
