@@ -1,0 +1,2 @@
+(df_template["OCC_DESC_DEC23"].str.contains("SEAFARER") == False) & 
+(df_template[tin_cols].apply(lambda x: set(str(i).strip().upper() for i in x if str(i).strip()) == {"IN"}, axis=1))
