@@ -12,3 +12,9 @@ Sure! Here are the headers only:
 	8.	Track Dependencies
 	9.	Final Review
 	10.	Move to Development or Implementation Phase
+
+
+
+
+
+final.astype(str).applymap(lambda x: x.rstrip('.0') if x.endswith('.0') else x).to_csv(new_excel_path_txt, index=False, header=False, sep="\t")
