@@ -18,3 +18,11 @@ Sure! Here are the headers only:
 
 
 final.astype(str).applymap(lambda x: x.rstrip('.0') if x.endswith('.0') else x).to_csv(new_excel_path_txt, index=False, header=False, sep="\t")
+
+
+df_template.loc[
+    ~df_template["OCC_DESC_DEC23"].str.contains("SEAFARER|DEPENDENT|INACTIVE|DOES NOT ISSUE TIN", case=False, na=False),
+    "OCC_DESC_DEC23"
+] = "ORDINARY"
+
+
