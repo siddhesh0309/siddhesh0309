@@ -1,0 +1,36 @@
+def extract_and_convert_vfin(zip_path):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        xml_name = zip_ref.namelist()[0]  # Assume only 1 XML inside
+        zip_ref.extract(xml_name, path="temp_vfin_extract")
+    xml_path = Path("temp_vfin_extract") / xml_name
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Parse XML into a list of dicts
+    records = []
+    for item in root.findall(".//Record"):  # Assuming 'Record' is the repeating tag
+        record = {}
+        for elem in item:
+            record[elem.tag] = elem.text
+        records.append(record)
+
+    # Convert to DataFrame
+    df = pd.DataFrame(records)
+
+    # Clean up temp folder
+    xml_path.unlink()
+    xml_path.parent.rmdir()
+
+    return df
+
+# Group variations under one customer name
+customer_group_map = {
+    "arcemitthal il": "Arcemitthal",
+    "arcemitthal lp": "Arcemitthal",
+    "arcemitthal": "Arcemitthal",
+    "badshah": "Badshah",
+    "exotic fruit": "Exotic Fruit"
+}
+
+# Load VFIN (ZIP -> XML -> DataFrame)
+vfin_df = extract_and_convert_vfin("Vfin.zip")
