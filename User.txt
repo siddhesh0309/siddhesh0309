@@ -1,0 +1,48 @@
+create_summary = input("\nDo you want to create Interest Summary File? (Yes/No): ").strip().lower()
+
+if create_summary == "yes":
+    from_date_input = input("\nEnter From Date (dd-mmm-yyyy) e.g. 01-Jan-2025: ").strip()
+    to_date_input = input("Enter To Date (dd-mmm-yyyy) e.g. 31-Jan-2025: ").strip()
+
+    from_date = datetime.strptime(from_date_input, "%d-%b-%Y")
+    to_date = datetime.strptime(to_date_input, "%d-%b-%Y")
+
+    if from_date.month != to_date.month or from_date.year != to_date.year:
+        print("Error: From Date and To Date must be same month and year.")
+        exit()
+
+    summary_rows = []
+
+    for customer_folder in root_output.iterdir():
+        if customer_folder.is_dir():
+            customer_name = customer_folder.name
+            month_dir = customer_folder / str(from_date.year) / from_date.strftime('%b')
+            monthly_file = month_dir / f"{customer_name}_{from_date.strftime('%b')}.xlsx"
+
+            if monthly_file.exists():
+                wb = load_workbook(monthly_file)
+                if "buyfp" in wb.sheetnames:
+                    df_buyfp = pd.read_excel(monthly_file, sheet_name="buyfp")
+
+                    df_buyfp['Date'] = pd.to_datetime(df_buyfp['Date'])
+                    df_filtered = df_buyfp[(df_buyfp['Date'] >= from_date) & (df_buyfp['Date'] <= to_date)]
+
+                    total_interest = df_filtered['Interest Amount'].sum()
+
+                    summary_rows.append({
+                        "Customer Name": customer_name,
+                        "From Date": from_date.strftime("%d-%b-%Y"),
+                        "To Date": to_date.strftime("%d-%b-%Y"),
+                        "Total Interest Amount": total_interest
+                    })
+
+    summary_dir = root_output / "Summary"
+    summary_dir.mkdir(exist_ok=True)
+
+    summary_df = pd.DataFrame(summary_rows)
+    summary_path = summary_dir / f"Customer_InterestSummary_{from_date.strftime('%d%b%Y')}_to_{to_date.strftime('%d%b%Y')}.xlsx"
+    summary_df.to_excel(summary_path, index=False)
+
+    print(f"\nSummary file created successfully at {summary_path}")
+else:
+    print("\nSkipping Summary creation. Process completed.")
