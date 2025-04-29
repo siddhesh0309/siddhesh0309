@@ -1,0 +1,201 @@
+import pandas as pd
+from pathlib import Path
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+from datetime import datetime
+
+# Helper to format Date columns
+def format_date_column(sheet, column_name, date_format="DDMMMYYYY"):
+    header = [cell.value for cell in sheet[1]]
+    if column_name in header:
+        col_idx = header.index(column_name) + 1
+        for row in sheet.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+            for cell in row:
+                if isinstance(cell.value, pd.Timestamp):
+                    cell.number_format = date_format
+
+# Grouping customer name variations
+customer_group_map = {
+    "arcemitthal il": "Arcemitthal",
+    "arcemitthal lp": "Arcemitthal",
+    "arcemitthal": "Arcemitthal",
+    "badshah": "Badshah",
+    "exotic fruit": "Exotic Fruit"
+}
+
+# Output root folder
+root_output = Path("Customer_Excels")
+root_output.mkdir(exist_ok=True)
+
+# Ask the user
+create_summary = input("\nDo you want to create Interest Summary File? (Yes/No): ").strip().lower()
+
+# === Generate summary file only if user selects "yes" ===
+if create_summary == "yes":
+    from_date_input = input("\nEnter From Date (dd-mmm-yyyy) e.g. 01-Jan-2025: ").strip()
+    to_date_input = input("Enter To Date (dd-mmm-yyyy) e.g. 31-Jan-2025: ").strip()
+
+    from_date = datetime.strptime(from_date_input, "%d-%b-%Y")
+    to_date = datetime.strptime(to_date_input, "%d-%b-%Y")
+
+    if from_date.month != to_date.month or from_date.year != to_date.year:
+        print("Error: From Date and To Date must be same month and year.")
+        exit()
+
+    summary_rows = []
+
+    for customer_folder in root_output.iterdir():
+        if customer_folder.is_dir():
+            customer_name = customer_folder.name
+            month_dir = customer_folder / str(from_date.year) / from_date.strftime('%b')
+            monthly_file = month_dir / f"{customer_name}_{from_date.strftime('%b')}.xlsx"
+
+            if monthly_file.exists():
+                wb = load_workbook(monthly_file)
+                if "buyfp" in wb.sheetnames:
+                    df_buyfp = pd.read_excel(monthly_file, sheet_name="buyfp")
+
+                    df_buyfp['Date'] = pd.to_datetime(df_buyfp['Date'])
+                    df_filtered = df_buyfp[(df_buyfp['Date'] >= from_date) & (df_buyfp['Date'] <= to_date)]
+
+                    total_interest = df_filtered['Interest Amount'].sum()
+
+                    summary_rows.append({
+                        "Customer Name": customer_name,
+                        "From Date": from_date.strftime("%d-%b-%Y"),
+                        "To Date": to_date.strftime("%d-%b-%Y"),
+                        "Total Interest Amount": total_interest
+                    })
+
+    summary_dir = root_output / "Summary"
+    summary_dir.mkdir(exist_ok=True)
+
+    summary_df = pd.DataFrame(summary_rows)
+    summary_path = summary_dir / f"Customer_InterestSummary_{from_date.strftime('%d%b%Y')}_to_{to_date.strftime('%d%b%Y')}.xlsx"
+    summary_df.to_excel(summary_path, index=False)
+
+    print(f"\nSummary file created successfully at {summary_path}")
+
+# === Generate customer files only if user selects "no" ===
+elif create_summary == "no":
+    # Load Excel files
+    vfin_df = pd.read_excel("Vfin.xlsx")
+    buyfp_df = pd.read_excel("buyfp.xlsx")
+    config_df = pd.read_excel("customer_config.xlsx")
+
+    vfin_df['Date'] = pd.to_datetime(vfin_df['Date'])
+    buyfp_df['Date'] = pd.to_datetime(buyfp_df['Date'])
+
+    # Normalize customer names
+    buyfp_df['Customer Normalized'] = (
+        buyfp_df['Customer Name'].str.strip().str.lower()
+        .map(customer_group_map)
+        .fillna(buyfp_df['Customer Name'])
+    )
+
+    for customer in buyfp_df['Customer Normalized'].dropna().unique():
+        config = config_df[config_df['Customer Name'].str.lower() == customer.lower()]
+        if config.empty:
+            print(f"Skipping {customer}: no config found.")
+            continue
+
+        config = config.iloc[0]
+        tbill, spread, tenor, roi = config['TBill Rate'], config['Spread'], config['Tenor'], config['ROI']
+
+        cust_buyfp = buyfp_df[buyfp_df['Customer Normalized'].str.lower() == customer.lower()].copy()
+        if 'Customer Normalized' in cust_buyfp.columns:
+            cust_buyfp.drop(columns=['Customer Normalized'], inplace=True)
+
+        # Fix numeric types
+        numeric_columns = ['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance', 'TBill Rate', 'Spread', 'Rate', 'ROI']
+        for col in numeric_columns:
+            if col in cust_buyfp.columns:
+                cust_buyfp[col] = pd.to_numeric(cust_buyfp[col], errors='coerce')
+
+        # Clean columns
+        integer_columns = ['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance']
+        float_columns = ['TBill Rate', 'Spread', 'Rate', 'ROI']
+        cust_buyfp[integer_columns] = cust_buyfp[integer_columns].fillna(0).round(0).astype('Int64')
+        cust_buyfp[float_columns] = cust_buyfp[float_columns].round(2)
+
+        # Match VFIN data
+        if "badshah" in customer.lower():
+            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("badshah")].copy()
+        elif "exotic fruit" in customer.lower():
+            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("exotic fruit")].copy()
+        elif "arcemitthal" in customer.lower():
+            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("arcemitthal|arcemittal")].copy()
+        else:
+            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.strip() == customer.lower().strip()].copy()
+
+        cust_vfin['ROI'] = roi
+        principal_col = 'Amount' if 'Amount' in cust_vfin.columns else 'Principal'
+        if principal_col not in cust_vfin.columns:
+            raise Exception(f"Missing '{principal_col}' column in vfin for {customer}")
+
+        cust_vfin['Interest Amount'] = round(cust_vfin[principal_col] * roi * 1 / 36500, 2)
+
+        # Create folders
+        customer_dir = root_output / customer
+        customer_dir.mkdir(exist_ok=True)
+
+        master_path = customer_dir / f"{customer}_Master.xlsx"
+        with pd.ExcelWriter(master_path, engine='openpyxl') as writer:
+            cust_vfin.to_excel(writer, sheet_name="vfin", index=False)
+            cust_buyfp.to_excel(writer, sheet_name="buyfp", index=False)
+
+        wb = load_workbook(master_path)
+        if "vfin" in wb.sheetnames:
+            format_date_column(wb["vfin"], "Date")
+        if "buyfp" in wb.sheetnames:
+            format_date_column(wb["buyfp"], "Date")
+        wb.save(master_path)
+
+        all_dates = pd.concat([cust_vfin["Date"], cust_buyfp["Date"]]).dropna()
+        for period in all_dates.dt.to_period("M").unique():
+            start = period.to_timestamp()
+            end = start + pd.offsets.MonthEnd(0)
+
+            vfin_month = cust_vfin[(cust_vfin["Date"] >= start) & (cust_vfin["Date"] <= end)]
+            buyfp_month = cust_buyfp[(cust_buyfp["Date"] >= start) & (cust_buyfp["Date"] <= end)]
+
+            year_str = start.strftime('%Y')
+            month_str = start.strftime('%b')
+            month_dir = customer_dir / year_str / month_str
+            month_dir.mkdir(parents=True, exist_ok=True)
+
+            file_path = month_dir / f"{customer}_{month_str}.xlsx"
+
+            if not file_path.exists():
+                with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                    vfin_month.to_excel(writer, sheet_name="vfin", index=False)
+                    buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
+            else:
+                wb = load_workbook(file_path)
+                if "vfin" in wb.sheetnames:
+                    sheet = wb["vfin"]
+                    sheet.append([])
+                    for row in dataframe_to_rows(vfin_month, index=False, header=False):
+                        sheet.append(row)
+                else:
+                    with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                        vfin_month.to_excel(writer, sheet_name="vfin", index=False)
+
+                if "buyfp" in wb.sheetnames:
+                    wb.remove(wb["buyfp"])
+                with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                    writer.book = wb
+                    buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
+                    writer.save()
+
+            wb = load_workbook(file_path)
+            if "vfin" in wb.sheetnames:
+                format_date_column(wb["vfin"], "Date")
+            if "buyfp" in wb.sheetnames:
+                format_date_column(wb["buyfp"], "Date")
+            wb.save(file_path)
+
+    print("\nCustomer processing completed.")
+
+else:
+    print("Invalid input. Please enter 'Yes' or 'No'.")
