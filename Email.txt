@@ -1,0 +1,11 @@
+Thanks for the call today.
+	•	We got a walkthrough of the Traces utility used to convert raw files into TDS certificate PDFs.
+	•	Certificates are segregated based on:
+	•	IB (Internet Banking)
+	•	Emailing
+	•	Physical dispatch
+	•	EY shares the certificate folder, which the Tax team sends to the vendor via SFTP.
+	•	The vendor sends emails to customers and shares bounce-back details with the Tax team.
+	•	For undelivered emails, the vendor sends the certificates via post to those customers.
+
+We’ll schedule another session to walk through the segregation process in detail and then assess automation feasibility.
