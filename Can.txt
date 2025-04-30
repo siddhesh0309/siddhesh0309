@@ -1,0 +1,56 @@
+from flask import Blueprint, request, jsonify
+from pydantic import ValidationError
+from models.pan_model import PANRequest
+from OpenSSL import crypto
+import json, base64, os, requests
+
+bp = Blueprint("pan_verification", __name__)
+
+UAT_API_ENDPOINT = "https://121.240.36.237/TIN/PanInquiryAPIBackEnd"
+HEADERS = {"Content-Type": "application/json"}
+
+CERT_PATH = "keystore/cert.pem"
+KEY_PATH = "keystore/key.pem"
+
+def generate_signature(payload: dict) -> str:
+    try:
+        with open(CERT_PATH, "rb") as cert_file:
+            cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_file.read())
+        with open(KEY_PATH, "rb") as key_file:
+            key = crypto.load_privatekey(crypto.FILETYPE_PEM, key_file.read())
+
+        json_bytes = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+        signature = crypto.sign(key, json_bytes, "sha256")
+        return base64.b64encode(signature).decode()
+    except Exception as e:
+        raise Exception(f"pyOpenSSL signing failed: {str(e)}")
+
+@bp.route('/verify_pan', methods=['POST'])
+def verify_pan():
+    try:
+        data = request.get_json()
+        try:
+            validated_data = PANRequest(**data)
+        except ValidationError as ve:
+            return jsonify({"validation_error": ve.errors()}), 422
+
+        payload = {
+            "header": {
+                "User_ID": validated_data.User_ID,
+                "Records_count": validated_data.Records_count,
+                "Request_time": validated_data.Request_time,
+                "Transaction_ID": validated_data.Transaction_ID,
+                "Version": validated_data.Version
+            },
+            "request": {
+                "inputData": [entry.dict() for entry in validated_data.inputData]
+            }
+        }
+
+        signature = generate_signature(payload)
+        payload["request"]["signature"] = signature
+
+        response = requests.post(UAT_API_ENDPOINT, json=payload, headers=HEADERS, verify=False)
+        return jsonify({"status_code": response.status_code, "response": response.json()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
