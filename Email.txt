@@ -9,3 +9,25 @@ Thanks for the call today.
 	•	For undelivered emails, the vendor sends the certificates via post to those customers.
 
 We’ll schedule another session to walk through the segregation process in detail and then assess automation feasibility.
+
+
+
+from OpenSSL import crypto
+
+# Load certificate and private key
+with open(CERT_PATH, "rb") as f:
+    cert = crypto.load_certificate(crypto.FILETYPE_PEM, f.read())
+
+with open(KEY_PATH, "rb") as f:
+    key = crypto.load_privatekey(crypto.FILETYPE_PEM, f.read())
+
+# Convert payload to compact JSON and sign it
+json_data = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+signed = crypto.sign(key, json_data, "sha256")
+
+# Convert to base64 string to add into payload
+return base64.b64encode(signed).decode()
+
+
+
+
