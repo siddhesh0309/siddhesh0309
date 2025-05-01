@@ -1,0 +1,28 @@
+import json
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
+def sign_request(payload_dict):
+    # Load private key from PEM
+    with open("key.pem", "rb") as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,
+            backend=default_backend()
+        )
+
+    # Convert payload to JSON string without whitespace
+    data = json.dumps(payload_dict, separators=(',', ':')).encode('utf-8')
+
+    # Sign using RSA + SHA256
+    signature = private_key.sign(
+        data,
+        padding.PKCS1v15(),
+        hashes.SHA256()
+    )
+
+    # Return base64 encoded signature string
+    return base64.b64encode(signature).decode('utf-8')
