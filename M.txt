@@ -1,0 +1,7 @@
+As discussed, please find below the minutes of our meeting:
+	1.	We discussed the WHIRL system files and the throughput file structure.
+	2.	A walkthrough was provided showing the massing done on both the WHIRL system and throughput files.
+	3.	An upload format file is being created for HSBCnet to facilitate the process.
+	4.	Once the file is received from HSBCnet with a successful status, the payment will be posted to the respective card.
+
+Attaching the reference steps file for your review. Kindly prepare the required format accordingly and revert back.
