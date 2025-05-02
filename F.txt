@@ -1,0 +1,81 @@
+from OpenSSL import crypto
+import base64
+import json
+
+def sign_request(payload_dict, key_path='key.pem', cert_path='cert.pem'):
+    # Convert to compact JSON byte string
+    data = json.dumps(payload_dict, separators=(',', ':')).encode('utf-8')
+
+    # Load private key
+    with open(key_path, 'rb') as f:
+        pkey = crypto.load_privatekey(crypto.FILETYPE_PEM, f.read())
+
+    # Load certificate
+    with open(cert_path, 'rb') as f:
+        cert = crypto.load_certificate(crypto.FILETYPE_PEM, f.read())
+
+    # Create detached PKCS7 signature
+    pkcs7 = crypto.PKCS7_sign(
+        cert, pkey, [], data,
+        crypto.PKCS7_BINARY | crypto.PKCS7_DETACHED
+    )
+
+    # Convert to DER and base64 encode
+    bio = crypto._new_mem_buf()
+    crypto._lib.i2d_PKCS7_bio(bio, pkcs7._pkcs7)
+    sig_der = crypto._bio_to_string(bio)
+    return base64.b64encode(sig_der).decode('utf-8')
+
+
+
+
+
+
+from flask import Blueprint, request, jsonify
+from app.models.pan_models import PANRequest
+from app.services.signer import sign_request
+import requests
+import json
+from datetime import datetime
+
+pan_blueprint = Blueprint('pan', __name__)
+
+@pan_blueprint.route('/verify_pan', methods=['POST'])
+def verify_pan():
+    try:
+        data = request.json
+        pan_req = PANRequest(**data)
+
+        input_data_dicts = [record.dict() for record in pan_req.input_data]
+        transaction_id = f"{pan_req.user_id}:{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        request_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Sign only inputData block
+        to_sign = {"inputData": input_data_dicts}
+        signature = sign_request(to_sign)
+
+        full_payload = {
+            "User_ID": pan_req.user_id,
+            "Records_count": str(len(input_data_dicts)),
+            "Request_time": request_time,
+            "Transaction_ID": transaction_id,
+            "Version": "4",
+            "inputData": input_data_dicts,
+            "signature": signature
+        }
+
+        print("Payload to Protean:")
+        print(json.dumps(full_payload, indent=2))
+
+        response = requests.post(
+            "https://121.240.36.237/TIN/PanInquiryAPIBackEnd",
+            json=full_payload,
+            headers={"Content-Type": "application/json"},
+            verify=False
+        )
+
+        return jsonify(response.json()), response.status_code
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
