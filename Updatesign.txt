@@ -1,0 +1,86 @@
+from flask import Blueprint, request, jsonify
+from app.models.pan_models import PANRequest
+from app.services.signer import sign_request
+import requests
+import uuid
+import json
+from datetime import datetime
+
+pan_blueprint = Blueprint('pan', __name__)
+
+@pan_blueprint.route('/verify_pan', methods=['POST'])
+def verify_pan():
+    try:
+        # Parse user input
+        data = request.json
+        print("Received from Insomnia:", data)
+
+        # Validate against model
+        pan_req = PANRequest(**data)
+
+        # Prepare data
+        input_data_dicts = [record.dict() for record in pan_req.input_data]
+
+        transaction_id = f"{pan_req.user_id}:{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        request_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Build request to sign
+        to_sign = {"inputData": input_data_dicts}
+        signature = sign_request(to_sign)
+
+        # Final payload to Protean
+        full_payload = {
+            "User_ID": pan_req.user_id,
+            "Records_count": str(len(input_data_dicts)),
+            "Request_time": request_time,
+            "Transaction_ID": transaction_id,
+            "Version": "4",
+            "inputData": input_data_dicts,
+            "signature": signature
+        }
+
+        # Debug log
+        print("====== Payload Sent to Protean ======")
+        print(json.dumps(full_payload, indent=2))
+
+        # API call to Protean UAT endpoint
+        url = "https://121.240.36.237/TIN/PanInquiryAPIBackEnd"
+
+        response = requests.post(
+            url,
+            json=full_payload,
+            headers={"Content-Type": "application/json"},
+            verify=False  # Disable cert check for UAT only
+        )
+
+        return jsonify(response.json()), response.status_code
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+
+import json
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
+def sign_request(payload_dict):
+    with open("key.pem", "rb") as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,
+            backend=default_backend()
+        )
+
+    message = json.dumps(payload_dict, separators=(',', ':')).encode('utf-8')
+
+    signature = private_key.sign(
+        message,
+        padding.PKCS1v15(),
+        hashes.SHA256()
+    )
+
+    return base64.b64encode(signature).decode('utf-8')
