@@ -3,40 +3,34 @@ import base64
 from oscrypto import asymmetric
 from asn1crypto import cms, pem
 
-def sign_request(payload_dict, key_path='unencrypted_key.pem', cert_path='cert.pem'):
-    # Serialize payload
+def sign_request(payload_dict, key_path='key.pem', cert_path='cert.pem'):
+    # Serialize inputData block as compact JSON
     data = json.dumps(payload_dict, separators=(',', ':')).encode('utf-8')
 
-    # Load key
+    # Load and unarmor private key
     with open(key_path, 'rb') as f:
         key_bytes = f.read()
         if pem.detect(key_bytes):
             _, _, key_bytes = pem.unarmor(key_bytes)
         private_key = asymmetric.load_private_key(key_bytes)
 
-    # Load certificate
+    # Load and unarmor certificate
     with open(cert_path, 'rb') as f:
         cert_bytes = f.read()
         if pem.detect(cert_bytes):
             _, _, cert_bytes = pem.unarmor(cert_bytes)
         cert = asymmetric.load_certificate(cert_bytes)
 
-    # Sign
-    signature = asymmetric.sign(
-        private_key,
-        data,
-        hash_algorithm='sha1',
-        padding='pkcs1',
-        algorithm='rsassa_pkcs1v15'
-    )
+    # Generate signature using SHA-1 with RSA PKCS#1 v1.5 padding
+    signature = asymmetric.rsa_pkcs1v15_sign(private_key, data, 'sha1')
 
-    # Build CMS signature
+    # Build CMS (PKCS#7) structure
     signed_data = cms.SignedData({
         'version': 'v1',
         'digest_algorithms': [cms.DigestAlgorithm({'algorithm': 'sha1'})],
         'encap_content_info': {
             'content_type': 'data',
-            'content': None
+            'content': None  # Detached signature
         },
         'certificates': [cert.asn1],
         'signer_infos': [
@@ -60,4 +54,5 @@ def sign_request(payload_dict, key_path='unencrypted_key.pem', cert_path='cert.p
         'content': signed_data
     })
 
-    return base64.b64encode(content_info.dump()).decode('utf-8')
+    der = content_info.dump()
+    return base64.b64encode(der).decode('utf-8')
