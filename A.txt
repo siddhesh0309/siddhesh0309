@@ -10,3 +10,14 @@ try:
 
 
 openssl pkcs12 -in keystore.p12 -cacerts -nokeys -out chain.pem
+
+
+
+
+keytool -importkeystore \
+  -srckeystore your_keystore.jks \
+  -srcstoretype JKS \
+  -destkeystore keystore.p12 \
+  -deststoretype PKCS12 \
+  -srcstorepass your_jks_password \
+  -deststorepass your_jks_password
