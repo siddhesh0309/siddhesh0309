@@ -1,0 +1,9 @@
+try:
+                result = response.json()
+            except ValueError:
+                result = {"raw_response": response.text}
+
+            return result, response.status_code
+
+        except Exception as e:
+            return {"error": str(e)}, 400
