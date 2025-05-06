@@ -1,0 +1,80 @@
+import json
+import base64
+from oscrypto import asymmetric
+from asn1crypto import pem, cms, x509
+
+def load_cert_chain(cert_path, chain_path):
+    certs = []
+
+    # Load main certificate
+    with open(cert_path, 'rb') as f:
+        cert_bytes = f.read()
+        if pem.detect(cert_bytes):
+            cert_bytes = pem.unarmor(cert_bytes)[2]
+        cert = asymmetric.load_certificate(cert_bytes)
+        certs.append(cert.asn1)
+
+    # Load intermediate/root certs if chain file provided
+    if chain_path:
+        with open(chain_path, 'rb') as f:
+            pem_data = f.read()
+
+        parts = pem_data.split(b'-----END CERTIFICATE-----')
+        for part in parts:
+            part = part.strip()
+            if part:
+                part += b'\n-----END CERTIFICATE-----\n'
+                _, _, cert_der = pem.unarmor(part)
+                certs.append(x509.Certificate.load(cert_der))
+
+    return certs
+
+def sign_request(payload_dict, key_path='key.pem', cert_path='cert.pem', chain_path='chain.pem'):
+    # Serialize input JSON without extra whitespace
+    data = json.dumps(payload_dict, separators=(',', ':')).encode('utf-8')
+
+    # Load private key
+    with open(key_path, 'rb') as f:
+        key_bytes = f.read()
+        if pem.detect(key_bytes):
+            key_bytes = pem.unarmor(key_bytes)[2]
+        private_key = asymmetric.load_private_key(key_bytes)
+
+    # Load cert chain
+    certs = load_cert_chain(cert_path, chain_path)
+    main_cert = certs[0]
+
+    # Sign data
+    signature = asymmetric.rsa_pkcs1v15_sign(private_key, data, 'sha1')
+
+    # Build PKCS7 / CMS structure
+    signed_data = cms.SignedData({
+        'version': 'v1',
+        'digest_algorithms': [cms.DigestAlgorithm({'algorithm': 'sha1'})],
+        'encap_content_info': {
+            'content_type': 'data',
+            'content': None  # detached
+        },
+        'certificates': certs,
+        'signer_infos': [
+            cms.SignerInfo({
+                'version': 'v1',
+                'sid': cms.SignerIdentifier({
+                    'issuer_and_serial_number': cms.IssuerAndSerialNumber({
+                        'issuer': main_cert.issuer,
+                        'serial_number': main_cert.serial_number
+                    })
+                }),
+                'digest_algorithm': {'algorithm': 'sha1'},
+                'signature_algorithm': {'algorithm': 'rsassa_pkcs1v15'},
+                'signature': signature
+            })
+        ]
+    })
+
+    content_info = cms.ContentInfo({
+        'content_type': 'signed_data',
+        'content': signed_data
+    })
+
+    return base64.b64encode(content_info.dump()).decode('utf-8')
