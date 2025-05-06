@@ -7,3 +7,6 @@ try:
 
         except Exception as e:
             return {"error": str(e)}, 400
+
+
+openssl pkcs12 -in keystore.p12 -cacerts -nokeys -out chain.pem
