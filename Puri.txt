@@ -1,0 +1,36 @@
+import pyautogui
+import time
+
+def click_element(image_path, description, confidence=0.8):
+    location = pyautogui.locateCenterOnScreen(image_path, confidence=confidence)
+    if location:
+        print(f"{description} found at {location}")
+        pyautogui.moveTo(location)
+        pyautogui.click()
+        return True
+    else:
+        print(f"{description} not found. Ensure it’s visible and matches the screenshot.")
+        return False
+
+# Step 0: Wait for user to open app
+print("Open the app. Script will start in 5 seconds...")
+time.sleep(5)
+
+# Step 1: Click on WSID field dynamically and type 'IN04'
+if click_element('wsid_input.png', 'WSID input field'):
+    time.sleep(0.5)
+    pyautogui.write('IN04', interval=0.1)
+else:
+    exit()
+
+# Step 2: Click on Submit button
+time.sleep(1)
+if not click_element('submit_button.png', 'Submit button'):
+    exit()
+
+# Step 3: Click on "Import Loan/Finance Capture"
+time.sleep(3)
+if not click_element('import_loan_button.png', '"Import Loan/Finance Capture" link'):
+    exit()
+
+print("Automation complete.")
