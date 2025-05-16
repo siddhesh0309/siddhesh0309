@@ -31,5 +31,8 @@ Sure! Here’s a simplified version without technical logic, focused on the valu
 
 Automated Occupation Classification and Data Integrity: This solution streamlines the enrichment of customer records by automatically classifying occupations based on predefined rules, improving data quality and consistency. It ensures that occupation information is updated accurately while reducing manual effort, enhancing compliance with regulatory standards. The process also maintains a clear audit trail, enabling easy validation and supporting reliable reporting to internal stakeholders and regulatory authorities.
 
+To address the high volume of manual exceptions in India’s 2024 FATCA and CRS reporting, I developed an automated utility designed to streamline exception handling and align data with country-specific schema requirements. This solution bridges the gap between HUB’s data limitations and the mandatory reporting fields by enriching, validating, and transforming the data as per regulatory expectations. As a result, the utility significantly reduces manual intervention, improves reporting accuracy, and enhances overall compliance readiness for FATCA and CRS submissions.
+
+
 
 
