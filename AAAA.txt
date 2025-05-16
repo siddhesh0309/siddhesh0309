@@ -18,3 +18,38 @@ df_template = pd.concat([
     merged_cust[['OCC_DESC_DEC23', 'GHO_DEC23']],
     merged_acc['ACC_STATUS_DEC23']
 ], axis=1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Clean columns
+df_mapping['Customer ID'] = df_mapping['Customer ID'].astype(str).str.strip()
+df_mapping['Account Number'] = df_mapping['Account Number'].astype(str).str.strip()
+df_template['Customer ID'] = df_template['Customer ID'].astype(str).str.strip()
+df_template['Account Number'] = df_template['Account Number'].astype(str).str.strip()
+
+# Map values
+cust_occ = df_mapping.drop_duplicates('Customer ID').set_index('Customer ID')['OCC_DESC_DEC23'].to_dict()
+cust_gho = df_mapping.drop_duplicates('Customer ID').set_index('Customer ID')['GHO_DEC23'].to_dict()
+acc_status = df_mapping.drop_duplicates('Account Number').set_index('Account Number')['ACC_STATUS_DEC23'].to_dict()
+
+df_template['OCC_DESC_DEC23'] = df_template['Customer ID'].map(cust_occ)
+df_template['GHO_DEC23'] = df_template['Customer ID'].map(cust_gho)
+df_template['ACC_STATUS_DEC23'] = df_template['Account Number'].map(acc_status)
+
+
+
+
+
+
