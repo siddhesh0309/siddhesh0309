@@ -1,0 +1,20 @@
+# Clean columns
+df_template['Customer ID'] = df_template['Customer ID'].astype(str).str.strip()
+df_template['Account Number'] = df_template['Account Number'].astype(str).str.strip()
+df_mapping['Customer ID'] = df_mapping['Customer ID'].astype(str).str.strip()
+df_mapping['Account Number'] = df_mapping['Account Number'].astype(str).str.strip()
+
+# Drop duplicates
+df_mapping_cust = df_mapping.drop_duplicates(subset='Customer ID', keep='first')
+df_mapping_acc = df_mapping.drop_duplicates(subset='Account Number', keep='first')
+
+# Step 1: Merge OCC_DESC_DEC23 and GHO_DEC23 using Customer ID
+lookup = df_mapping_cust[['Customer ID', 'OCC_DESC_DEC23', 'GHO_DEC23']]
+merged = df_template[['Customer ID']].merge(lookup, on='Customer ID', how='left')
+
+df_template['OCC_DESC_DEC23'] = merged['OCC_DESC_DEC23']
+df_template['GHO_DEC23'] = merged['GHO_DEC23']
+
+# Step 2: Map ACC_STATUS_DEC23 using Account Number (directly update df_template)
+acc_status_dict = df_mapping_acc.set_index('Account Number')['ACC_STATUS_DEC23'].to_dict()
+df_template['ACC_STATUS_DEC23'] = df_template['Account Number'].map(acc_status_dict)
