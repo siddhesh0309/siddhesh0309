@@ -18,3 +18,18 @@ df_template['GHO_DEC23'] = merged['GHO_DEC23']
 # Step 2: Map ACC_STATUS_DEC23 using Account Number (directly update df_template)
 acc_status_dict = df_mapping_acc.set_index('Account Number')['ACC_STATUS_DEC23'].to_dict()
 df_template['ACC_STATUS_DEC23'] = df_template['Account Number'].map(acc_status_dict)
+
+
+
+
+
+
+
+Sure! Here’s a simplified version without technical logic, focused on the value and purpose of the solution:
+
+⸻
+
+Automated Occupation Classification and Data Integrity: This solution streamlines the enrichment of customer records by automatically classifying occupations based on predefined rules, improving data quality and consistency. It ensures that occupation information is updated accurately while reducing manual effort, enhancing compliance with regulatory standards. The process also maintains a clear audit trail, enabling easy validation and supporting reliable reporting to internal stakeholders and regulatory authorities.
+
+
+
