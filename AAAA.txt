@@ -1,0 +1,20 @@
+# Clean columns
+df_template['Customer ID'] = df_template['Customer ID'].astype(str).str.strip()
+df_template['Account Number'] = df_template['Account Number'].astype(str).str.strip()
+df_mapping['Customer ID'] = df_mapping['Customer ID'].astype(str).str.strip()
+df_mapping['Account Number'] = df_mapping['Account Number'].astype(str).str.strip()
+
+# Step 1: Merge occupation + GHO by Customer ID
+lookup_cust = df_mapping[['Customer ID', 'OCC_DESC_DEC23', 'GHO_DEC23']].drop_duplicates('Customer ID')
+merged_cust = df_template[['Customer ID']].merge(lookup_cust, on='Customer ID', how='left')
+
+# Step 2: Merge account status by Account Number
+lookup_acc = df_mapping[['Account Number', 'ACC_STATUS_DEC23']].drop_duplicates('Account Number')
+merged_acc = df_template[['Account Number']].merge(lookup_acc, on='Account Number', how='left')
+
+# Final: Combine both
+df_template = pd.concat([
+    df_template.drop(columns=['OCC_DESC_DEC23', 'GHO_DEC23', 'ACC_STATUS_DEC23'], errors='ignore'),
+    merged_cust[['OCC_DESC_DEC23', 'GHO_DEC23']],
+    merged_acc['ACC_STATUS_DEC23']
+], axis=1)
