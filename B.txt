@@ -1,81 +1,81 @@
-import easyocr
 import cv2
-from pdf2image import convert_from_path
+import pytesseract
 import numpy as np
 import pandas as pd
 
-# Step 1: Convert PDF page to image
-pdf_path = "sample.pdf"
-pages = convert_from_path(pdf_path, dpi=300)
-image_path = "page_image.png"
-pages[0].save(image_path, 'PNG')
+# Load image
+image_path = "110EDC4D-4374-4AEA-B316-93F5E601CE2D.jpeg"
+img = cv2.imread(image_path)
 
-# Step 2: Run EasyOCR on the image
-reader = easyocr.Reader(['en'], gpu=False)
-results = reader.readtext(image_path)
+# Convert to grayscale and invert
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+gray = cv2.bitwise_not(gray)
 
-# Step 3: Prepare and sort text by vertical position
-lines = []
-for bbox, text, _ in results:
-    top_left = bbox[0]
-    y = int(top_left[1])
-    lines.append((y, text))
+# Thresholding to make lines more visible
+_, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
-# Sort by Y (vertical position)
-lines.sort()
+# Detect horizontal lines
+horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
 
-# Step 4: Group into rows based on y-difference threshold
-rows = []
-current_row = []
-threshold = 10
+# Detect vertical lines
+vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
+vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
 
-for i in range(len(lines)):
-    if not current_row:
-        current_row.append(lines[i])
-    else:
-        if abs(lines[i][0] - current_row[-1][0]) <= threshold:
-            current_row.append(lines[i])
-        else:
-            rows.append([text for _, text in current_row])
-            current_row = [lines[i]]
-if current_row:
-    rows.append([text for _, text in current_row])
+# Combine lines to get boxes
+table_mask = cv2.add(horizontal_lines, vertical_lines)
 
-# Step 5: Split rows into potential tables based on vertical gaps
+# Find contours (cell boxes)
+contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+# Sort contours top to bottom, then left to right
+def sort_contours(cnts):
+    bounding_boxes = [cv2.boundingRect(c) for c in cnts]
+    rows = {}
+    for i, (x, y, w, h) in enumerate(bounding_boxes):
+        row_key = y // 30  # grouping rows by height
+        if row_key not in rows:
+            rows[row_key] = []
+        rows[row_key].append((x, y, w, h, i))
+
+    sorted_rows = []
+    for row in sorted(rows.keys()):
+        sorted_rows.append(sorted(rows[row], key=lambda b: b[0]))
+
+    return [[cnts[i[-1]] for i in row] for row in sorted_rows]
+
+# Sort and extract table data
+sorted_contours = sort_contours(contours)
+table_data = []
+
+for row in sorted_contours:
+    current_row = []
+    for c in row:
+        x, y, w, h = cv2.boundingRect(c)
+        cell_img = img[y:y+h, x:x+w]
+        text = pytesseract.image_to_string(cell_img, config='--psm 7').strip()
+        current_row.append(text)
+    if any(current_row):  # skip empty rows
+        table_data.append(current_row)
+
+# Print second table (we assume ~3 tables visually)
+# Tip: Use keywords or row size to split if table count varies
 tables = []
-current_table = []
-prev_y = None
+current = []
+for row in table_data:
+    if len(row) == 1 and current:
+        tables.append(current)
+        current = []
+    current.append(row)
+if current:
+    tables.append(current)
 
-for y, text in lines:
-    if prev_y is not None and abs(y - prev_y) > 50:
-        if current_table:
-            tables.append(current_table)
-            current_table = []
-    current_table.append((y, text))
-    prev_y = y
-if current_table:
-    tables.append(current_table)
-
-# Step 6: Extract the second table
+# Extract and display second table
 if len(tables) >= 2:
-    second_table = tables[1]
-
-    # Organize into readable DataFrame
-    table_data = []
-    y_grouped = {}
-    for y, text in second_table:
-        key = int(y // 10)  # approximate line grouping
-        if key in y_grouped:
-            y_grouped[key].append(text)
-        else:
-            y_grouped[key] = [text]
-    for key in sorted(y_grouped.keys()):
-        table_data.append(y_grouped[key])
-
-    df = pd.DataFrame(table_data)
-    print("\nSecond Table:")
+    df = pd.DataFrame(tables[1])
+    print("\nSecond table:")
     print(df)
-
-    df.to_csv("second_table_easyocr.csv", index=False)
+    df.to_csv("second_table_from_contours.csv", index=False, header=False)
+    print("\nSaved as 'second_table_from_contours.csv'")
 else:
-    print("Less than 2 tables found based on OCR segmentation.")
+    print("Less than 2 tables found.")
