@@ -1,42 +1,36 @@
+import fitz  # PyMuPDF
 import cv2
 import numpy as np
-from pdf2image import convert_from_path
 import os
 
-# Convert first 3 pages of PDF to images
 pdf_path = "your_file.pdf"
-pages = convert_from_path(pdf_path, dpi=300, first_page=1, last_page=3)
+doc = fitz.open(pdf_path)
 
-for page_number, page in enumerate(pages, start=1):
-    image_path = f"page_{page_number}.jpg"
-    page.save(image_path, "JPEG")
+for page_number in range(min(3, len(doc))):
+    page = doc.load_page(page_number)
+    pix = page.get_pixmap(dpi=300)
+    image_path = f"page_{page_number + 1}.jpg"
+    pix.save(image_path)
 
-    # Load image
+    # Continue your OpenCV table detection here (same as earlier)
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.bitwise_not(gray)
-
-    # Threshold
     _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
-    # Detect horizontal and vertical lines
     horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
     horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
 
     vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
     vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
 
-    # Combine to form table mask
     table_mask = cv2.add(horizontal_lines, vertical_lines)
-
-    # Find contours of all table boxes
     contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Sort top to bottom
     bounding_boxes = [cv2.boundingRect(c) for c in contours]
-    sorted_boxes = sorted(bounding_boxes, key=lambda b: b[1])  # sort by y
+    sorted_boxes = sorted(bounding_boxes, key=lambda b: b[1])
 
-    # Group tables based on vertical spacing
+    # Group boxes into tables
     tables = []
     current_table = []
     last_y = -100
@@ -50,19 +44,16 @@ for page_number, page in enumerate(pages, start=1):
     if current_table:
         tables.append(current_table)
 
-    # Extract 2nd table
     if len(tables) >= 2:
         table_boxes = tables[1]
-        # Get bounding rectangle of the entire table
         min_x = min([x for x, y, w, h in table_boxes])
         min_y = min([y for x, y, w, h in table_boxes])
         max_x = max([x + w for x, y, w, h in table_boxes])
         max_y = max([y + h for x, y, w, h in table_boxes])
         table_img = img[min_y:max_y, min_x:max_x]
-        output_path = f"second_table_page{page_number}.jpg"
-        cv2.imwrite(output_path, table_img)
-        print(f"Saved: {output_path}")
+        cv2.imwrite(f"second_table_page{page_number + 1}.jpg", table_img)
+        print(f"Saved: second_table_page{page_number + 1}.jpg")
     else:
-        print(f"Page {page_number}: Less than 2 tables found.")
+        print(f"Page {page_number + 1}: Less than 2 tables found.")
 
     os.remove(image_path)
