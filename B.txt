@@ -1,0 +1,81 @@
+import easyocr
+import cv2
+from pdf2image import convert_from_path
+import numpy as np
+import pandas as pd
+
+# Step 1: Convert PDF page to image
+pdf_path = "sample.pdf"
+pages = convert_from_path(pdf_path, dpi=300)
+image_path = "page_image.png"
+pages[0].save(image_path, 'PNG')
+
+# Step 2: Run EasyOCR on the image
+reader = easyocr.Reader(['en'], gpu=False)
+results = reader.readtext(image_path)
+
+# Step 3: Prepare and sort text by vertical position
+lines = []
+for bbox, text, _ in results:
+    top_left = bbox[0]
+    y = int(top_left[1])
+    lines.append((y, text))
+
+# Sort by Y (vertical position)
+lines.sort()
+
+# Step 4: Group into rows based on y-difference threshold
+rows = []
+current_row = []
+threshold = 10
+
+for i in range(len(lines)):
+    if not current_row:
+        current_row.append(lines[i])
+    else:
+        if abs(lines[i][0] - current_row[-1][0]) <= threshold:
+            current_row.append(lines[i])
+        else:
+            rows.append([text for _, text in current_row])
+            current_row = [lines[i]]
+if current_row:
+    rows.append([text for _, text in current_row])
+
+# Step 5: Split rows into potential tables based on vertical gaps
+tables = []
+current_table = []
+prev_y = None
+
+for y, text in lines:
+    if prev_y is not None and abs(y - prev_y) > 50:
+        if current_table:
+            tables.append(current_table)
+            current_table = []
+    current_table.append((y, text))
+    prev_y = y
+if current_table:
+    tables.append(current_table)
+
+# Step 6: Extract the second table
+if len(tables) >= 2:
+    second_table = tables[1]
+
+    # Organize into readable DataFrame
+    table_data = []
+    y_grouped = {}
+    for y, text in second_table:
+        key = int(y // 10)  # approximate line grouping
+        if key in y_grouped:
+            y_grouped[key].append(text)
+        else:
+            y_grouped[key] = [text]
+    for key in sorted(y_grouped.keys()):
+        table_data.append(y_grouped[key])
+
+    df = pd.DataFrame(table_data)
+    print("\nSecond Table:")
+    print(df)
+
+    df.to_csv("second_table_easyocr.csv", index=False)
+else:
+    print("Less than 2 tables found based on OCR segmentation.")
