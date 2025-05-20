@@ -2,39 +2,35 @@ import fitz  # PyMuPDF
 import cv2
 import numpy as np
 import os
+import pandas as pd
 
-pdf_path = "your_file.pdf"
-doc = fitz.open(pdf_path)
-
-for page_number in range(min(3, len(doc))):
-    page = doc.load_page(page_number)
-    pix = page.get_pixmap(dpi=300)
-    image_path = f"page_{page_number + 1}.jpg"
-    pix.save(image_path)
-
-    # Continue your OpenCV table detection here (same as earlier)
+def extract_second_table(image_path):
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.bitwise_not(gray)
     _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
+    # Detect horizontal and vertical lines
     horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
     horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
 
     vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
     vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
 
+    # Combine line masks to detect table grid
     table_mask = cv2.add(horizontal_lines, vertical_lines)
+
+    # Find contours of all cells
     contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
     bounding_boxes = [cv2.boundingRect(c) for c in contours]
-    sorted_boxes = sorted(bounding_boxes, key=lambda b: b[1])
+    bounding_boxes = sorted(bounding_boxes, key=lambda b: b[1])  # sort top-to-bottom
 
-    # Group boxes into tables
+    # Group into tables based on vertical spacing
     tables = []
     current_table = []
     last_y = -100
-    for box in sorted_boxes:
+
+    for box in bounding_boxes:
         x, y, w, h = box
         if abs(y - last_y) > 50 and current_table:
             tables.append(current_table)
@@ -44,15 +40,41 @@ for page_number in range(min(3, len(doc))):
     if current_table:
         tables.append(current_table)
 
+    # Now use second table based on reading order
     if len(tables) >= 2:
-        table_boxes = tables[1]
-        min_x = min([x for x, y, w, h in table_boxes])
-        min_y = min([y for x, y, w, h in table_boxes])
-        max_x = max([x + w for x, y, w, h in table_boxes])
-        max_y = max([y + h for x, y, w, h in table_boxes])
-        table_img = img[min_y:max_y, min_x:max_x]
-        cv2.imwrite(f"second_table_page{page_number + 1}.jpg", table_img)
-        print(f"Saved: second_table_page{page_number + 1}.jpg")
+        second_table = tables[1]
+
+        # Group cells into rows
+        rows = {}
+        for x, y, w, h in second_table:
+            row_key = y // 20
+            rows.setdefault(row_key, []).append((x, y, w, h))
+
+        table_structure = []
+        for row_key in sorted(rows.keys()):
+            row = sorted(rows[row_key], key=lambda b: b[0])
+            table_structure.append(["" for _ in row])  # Blank cells for each col
+
+        return table_structure
+    else:
+        return None  # Less than 2 tables
+
+# MAIN: Convert PDF pages and extract visually 2nd table
+pdf_path = "your_file.pdf"
+doc = fitz.open(pdf_path)
+
+for page_number in range(min(3, len(doc))):
+    page = doc.load_page(page_number)
+    pix = page.get_pixmap(dpi=300)
+    image_path = f"page_{page_number + 1}.jpg"
+    pix.save(image_path)
+
+    table_data = extract_second_table(image_path)
+    if table_data:
+        df = pd.DataFrame(table_data)
+        output_excel = f"second_table_page{page_number + 1}.xlsx"
+        df.to_excel(output_excel, index=False, header=False)
+        print(f"Page {page_number + 1} → Saved as: {output_excel}")
     else:
         print(f"Page {page_number + 1}: Less than 2 tables found.")
 
