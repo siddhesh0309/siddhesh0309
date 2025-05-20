@@ -1,0 +1,24 @@
+import camelot
+
+# Path to your PDF
+pdf_path = "sample.pdf"  # Replace with your actual file name
+
+# Extract tables from the first page using lattice mode (for bordered tables)
+tables = camelot.read_pdf(pdf_path, pages='1', flavor='lattice')
+
+# Show number of tables detected
+print(f"Total tables found: {len(tables)}")
+
+# Check if second table exists
+if len(tables) >= 2:
+    second_table = tables[1].df  # 0-indexed
+    print("\nSecond Table Extracted:\n")
+    print(second_table)
+
+    # Save as CSV and Excel (optional)
+    second_table.to_csv("second_table.csv", index=False)
+    second_table.to_excel("second_table.xlsx", index=False)
+
+    print("\nTable saved as 'second_table.csv' and 'second_table.xlsx'")
+else:
+    print("Less than 2 tables found on the page.")
