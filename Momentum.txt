@@ -1,0 +1,12 @@
+Efficiency: RPA BOT Removal by Python Packages
+We successfully integrated Python packages to replace RPA bots, achieving significant tech debt reduction and enabling code reuse. This strategic move has resulted in substantial cost avoidance across our operations. Stay tuned for further exciting updates on RPA removal and enhancements using the Power Platform.
+
+
+
+
+An automated python-based utility designed to streamline exception handling and align data with country-specific schema requirements.
+• This solution addresses approximately 385k manual exceptions in India's 2024 FATCA and CRS reporting - which covers about 300k customers of HSBC.
+• This solution bridges the gap between HUB's data limitations and the mandatory reporting fields by enriching, validating, and transforming the data as per regulatory expectations. The utility reduces manual intervention, improves reporting accuracy, and enhances overall compliance readiness for FATCA and CRS submissions.
+• Automated Occupation Classification and Data Integrity: This solution automatically classifies occupations and exceptions based on predefined rules. It ensures that information is updated accurately while reducing manual effort, enhancing compliance with regulatory standards.
+• The process also maintains enabling easy validation and supporting reliable reporting to internal stakeholders and regulatory authorities.
+• The automated system minimizes the likelihood of human error & reputational damage, ensuring that the data provided to Income Tax Reporting portal is accurate and reliable.
