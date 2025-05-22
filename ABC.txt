@@ -1,0 +1,37 @@
+from selenium.webdriver.common.action_chains import ActionChains
+
+# ... inside your main loop (after filling form fields) ...
+for attempt in range(3):
+    try:
+        # Locate the CAPTCHA image
+        captcha_element = driver.find_element(By.ID, "imgCaptcha")
+
+        # Get element location and size
+        location = captcha_element.location_once_scrolled_into_view
+        size = captcha_element.size
+
+        # Take full screenshot
+        png = driver.get_screenshot_as_png()
+        image = Image.open(io.BytesIO(png))
+
+        # Calculate coordinates
+        left = location['x']
+        top = location['y']
+        right = left + size['width']
+        bottom = top + size['height']
+
+        # Crop the CAPTCHA from screenshot
+        captcha_image = image.crop((left, top, right, bottom))
+        captcha_image.save(CAPTCHA_IMAGE)
+
+        # OCR read
+        result = reader.readtext(CAPTCHA_IMAGE)
+        if result:
+            captcha_text = result[0][1].replace(" ", "")
+            driver.find_element(By.ID, "txtcaptcha").send_keys(captcha_text)
+            driver.find_element(By.ID, "btnGo").click()
+            time.sleep(3)
+            break
+    except Exception as cap_err:
+        print(f"Captcha retry error: {cap_err}")
+        continue
