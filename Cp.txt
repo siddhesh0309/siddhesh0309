@@ -1,0 +1,129 @@
+import pandas as pd
+import time
+import io
+import os
+from PIL import Image
+import easyocr
+import cv2
+import numpy as np
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoAlertPresentException
+
+# ----- CONFIG -----
+EXCEL_FILE = "eway_data.xlsx"
+LOG_FILE = "eway_log.csv"
+CAPTCHA_IMAGE = "captcha_raw.png"
+CLEANED_IMAGE = "captcha_clean.png"
+URL = "https://ewaybillgst.gov.in/ewaybill/PrintEWB.aspx"
+CHROME_DRIVER_PATH = r"C:\path\to\chromedriver.exe"  # <-- UPDATE THIS PATH
+
+# ----- OCR + Chrome -----
+reader = easyocr.Reader(['en'])
+
+options = webdriver.ChromeOptions()
+options.add_argument("--start-maximized")
+driver = webdriver.Chrome(executable_path=CHROME_DRIVER_PATH, options=options)
+
+# ----- Load Data -----
+df = pd.read_excel(EXCEL_FILE)
+df["Status"] = ""
+
+# ----- Load or Init Log -----
+if os.path.exists(LOG_FILE):
+    done_log = pd.read_csv(LOG_FILE)
+    done_eWayBills = set(done_log['eWayBillNo'].astype(str))
+else:
+    done_eWayBills = set()
+    pd.DataFrame(columns=["eWayBillNo", "Status"]).to_csv(LOG_FILE, index=False)
+
+# ----- Detect and Remove Blue Line -----
+def clean_captcha_image(image_path):
+    img = cv2.imread(image_path)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    # Detect blue line
+    lower_blue = np.array([90, 50, 50])
+    upper_blue = np.array([130, 255, 255])
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+    # Inpaint to remove
+    cleaned = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
+    cv2.imwrite(CLEANED_IMAGE, cleaned)
+    return CLEANED_IMAGE
+
+# ----- Alert Handler -----
+def check_and_accept_alert():
+    try:
+        alert = driver.switch_to.alert
+        print("Alert detected:", alert.text)
+        alert.accept()
+        return True
+    except NoAlertPresentException:
+        return False
+
+# ----- MAIN LOOP -----
+for index, row in df.iterrows():
+    ewb_no = str(row['eWayBillNo'])
+
+    if ewb_no in done_eWayBills:
+        print(f"Skipping {ewb_no}")
+        continue
+
+    try:
+        driver.get(URL)
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtEwbNo")))
+
+        driver.find_element(By.ID, "txtEwbNo").send_keys(ewb_no)
+        driver.find_element(By.ID, "txtGenDate").send_keys(str(row['eWayBillDate']))
+        driver.find_element(By.ID, "txtGenBy").send_keys(str(row['GeneratedBy']))
+        driver.find_element(By.ID, "txtDocNo").send_keys(str(row['DocumentNo']))
+
+        # CAPTCHA Retry Loop
+        for attempt in range(3):
+            try:
+                captcha_element = driver.find_element(By.XPATH, "//img[@id='imgCaptcha']")
+                captcha_element.screenshot(CAPTCHA_IMAGE)
+
+                # Clean blue line
+                processed_path = clean_captcha_image(CAPTCHA_IMAGE)
+
+                # OCR
+                result = reader.readtext(processed_path)
+                if result:
+                    captcha_text = result[0][1].replace(" ", "")
+                    driver.find_element(By.ID, "txtcaptcha").clear()
+                    driver.find_element(By.ID, "txtcaptcha").send_keys(captcha_text)
+                    driver.find_element(By.ID, "btnGo").click()
+
+                    time.sleep(2)
+                    if check_and_accept_alert():
+                        print(f"Attempt {attempt+1}: Invalid CAPTCHA")
+                        continue  # Try again
+                    else:
+                        print("Captcha accepted.")
+                        break
+            except Exception as cap_err:
+                print("CAPTCHA error:", cap_err)
+                continue
+        else:
+            # 3 attempts failed
+            with open(LOG_FILE, "a") as logf:
+                logf.write(f"{ewb_no},CaptchaFailed\n")
+            print(f"Captcha failed for {ewb_no}")
+            continue
+
+        # Final Success
+        time.sleep(5)
+        with open(LOG_FILE, "a") as logf:
+            logf.write(f"{ewb_no},Success\n")
+        print(f"Done: {ewb_no}")
+
+    except Exception as e:
+        print(f"Error for {ewb_no}: {e}")
+        with open(LOG_FILE, "a") as logf:
+            logf.write(f"{ewb_no},Failed\n")
+
+driver.quit()
