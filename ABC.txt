@@ -35,3 +35,33 @@ for attempt in range(3):
     except Exception as cap_err:
         print(f"Captcha retry error: {cap_err}")
         continue
+
+
+
+
+
+
+
+for attempt in range(3):
+    try:
+        # Get the CAPTCHA element using XPath
+        captcha_element = driver.find_element(By.XPATH, "//img[@id='imgCaptcha']")
+
+        # Take screenshot of just the element (works in Selenium 4+)
+        captcha_element.screenshot(CAPTCHA_IMAGE)
+
+        # Use OCR to read the image
+        result = reader.readtext(CAPTCHA_IMAGE)
+        if result:
+            captcha_text = result[0][1].replace(" ", "")
+            driver.find_element(By.ID, "txtcaptcha").clear()
+            driver.find_element(By.ID, "txtcaptcha").send_keys(captcha_text)
+            driver.find_element(By.ID, "btnGo").click()
+            time.sleep(3)
+            break
+    except Exception as cap_err:
+        print(f"Captcha retry error: {cap_err}")
+        continue
+
+
+
