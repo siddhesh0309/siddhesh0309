@@ -1,28 +1,40 @@
 import pandas as pd
 import os
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 from glob import glob
 
-# Folder containing all template .xlsm files
-template_folder = "your_folder_path_here"  # replace with actual path
-output_file = "merged_templates.xlsx"
+# Paths
+template_folder = "Templates"  # your folder with multiple templates
+master_template = "master_template.xlsm"
+output_file = "updated_master_template.xlsm"
 
-# Collect all files
+# Collect data from all templates
+all_rows = []
 files = glob(os.path.join(template_folder, "*.xlsm"))
 
-merged_data = []
-
-print("📥 Merging templates...")
+print("📥 Reading templates...")
 for file in files:
-    print(f"→ Reading: {os.path.basename(file)}")
-    df = pd.read_excel(file, sheet_name="Account Holder", engine="openpyxl", skiprows=8, header=None)
-    headers = pd.read_excel(file, sheet_name="Account Holder", engine="openpyxl", skiprows=3, nrows=1).columns.tolist()
+    print(f"→ {os.path.basename(file)}")
+    df = pd.read_excel(file, sheet_name="Account Holder", skiprows=8, header=None, engine="openpyxl")
+    headers = pd.read_excel(file, sheet_name="Account Holder", skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
     df.columns = headers
-    df["Source File"] = os.path.basename(file)  # optional: track source file
-    merged_data.append(df)
+    all_rows.append(df)
 
-# Combine all data
-final_df = pd.concat(merged_data, ignore_index=True)
+# Merge all rows
+merged_df = pd.concat(all_rows, ignore_index=True)
 
-# Save to single Excel file
-final_df.to_excel(output_file, index=False)
-print(f"✅ Merged file saved as: {output_file}")
+# Load the master template (preserve macros)
+print("✍️ Writing to master template...")
+wb = load_workbook(master_template, keep_vba=True)
+ws = wb["Account Holder"]
+
+# Start writing from row 9
+start_row = 9
+for r_idx, row in enumerate(dataframe_to_rows(merged_df, index=False, header=False), start=start_row):
+    for c_idx, value in enumerate(row, start=1):
+        ws.cell(row=r_idx, column=c_idx, value=value)
+
+# Save to new updated output
+wb.save(output_file)
+print(f"✅ Master template updated and saved as {output_file}")
