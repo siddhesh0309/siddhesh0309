@@ -1,0 +1,28 @@
+import pandas as pd
+import os
+from glob import glob
+
+# Folder containing all template .xlsm files
+template_folder = "your_folder_path_here"  # replace with actual path
+output_file = "merged_templates.xlsx"
+
+# Collect all files
+files = glob(os.path.join(template_folder, "*.xlsm"))
+
+merged_data = []
+
+print("📥 Merging templates...")
+for file in files:
+    print(f"→ Reading: {os.path.basename(file)}")
+    df = pd.read_excel(file, sheet_name="Account Holder", engine="openpyxl", skiprows=8, header=None)
+    headers = pd.read_excel(file, sheet_name="Account Holder", engine="openpyxl", skiprows=3, nrows=1).columns.tolist()
+    df.columns = headers
+    df["Source File"] = os.path.basename(file)  # optional: track source file
+    merged_data.append(df)
+
+# Combine all data
+final_df = pd.concat(merged_data, ignore_index=True)
+
+# Save to single Excel file
+final_df.to_excel(output_file, index=False)
+print(f"✅ Merged file saved as: {output_file}")
