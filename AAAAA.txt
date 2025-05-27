@@ -5,36 +5,51 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from glob import glob
 
 # Paths
-template_folder = "Templates"  # your folder with multiple templates
+template_folder = "Templates"  # Folder with template files
 master_template = "master_template.xlsm"
 output_file = "updated_master_template.xlsm"
 
-# Collect data from all templates
-all_rows = []
+# Target sheets and headers
+sheets = {
+    "Account Holder": {"skiprows": 8},
+    "Controlling Person": {"skiprows": 8}
+}
+
+# Load all data
+merged_data = {sheet: [] for sheet in sheets}
+
+print("📥 Reading all templates...")
 files = glob(os.path.join(template_folder, "*.xlsm"))
 
-print("📥 Reading templates...")
 for file in files:
     print(f"→ {os.path.basename(file)}")
-    df = pd.read_excel(file, sheet_name="Account Holder", skiprows=8, header=None, engine="openpyxl")
-    headers = pd.read_excel(file, sheet_name="Account Holder", skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
-    df.columns = headers
-    all_rows.append(df)
+    for sheet_name, opts in sheets.items():
+        try:
+            df = pd.read_excel(file, sheet_name=sheet_name, skiprows=opts["skiprows"], header=None, engine="openpyxl")
+            headers = pd.read_excel(file, sheet_name=sheet_name, skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
+            df.columns = headers
+            merged_data[sheet_name].append(df)
+        except Exception as e:
+            print(f"⚠️ Could not read {sheet_name} from {os.path.basename(file)}: {e}")
 
-# Merge all rows
-merged_df = pd.concat(all_rows, ignore_index=True)
-
-# Load the master template (preserve macros)
-print("✍️ Writing to master template...")
+# Load master template
+print("✍️ Writing merged data into master template...")
 wb = load_workbook(master_template, keep_vba=True)
-ws = wb["Account Holder"]
 
-# Start writing from row 9
-start_row = 9
-for r_idx, row in enumerate(dataframe_to_rows(merged_df, index=False, header=False), start=start_row):
-    for c_idx, value in enumerate(row, start=1):
-        ws.cell(row=r_idx, column=c_idx, value=value)
+for sheet_name in sheets:
+    if sheet_name not in wb.sheetnames:
+        print(f"❌ Sheet '{sheet_name}' not found in master template. Skipping.")
+        continue
 
-# Save to new updated output
+    ws = wb[sheet_name]
+    start_row = 9  # Data starts after headers
+
+    # Merge and write rows
+    full_df = pd.concat(merged_data[sheet_name], ignore_index=True)
+    for r_idx, row in enumerate(dataframe_to_rows(full_df, index=False, header=False), start=start_row):
+        for c_idx, value in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=value)
+
+# Save output
 wb.save(output_file)
 print(f"✅ Master template updated and saved as {output_file}")
