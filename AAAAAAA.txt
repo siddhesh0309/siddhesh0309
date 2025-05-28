@@ -36,11 +36,8 @@ for file in files:
                 print(f"⚠️ Skipping '{sheet_name}' in {os.path.basename(file)} — no data found after row 8.")
                 continue
 
-            headers = pd.read_excel(file, sheet_name=sheet_name, skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
-
-            if len(headers) != df.shape[1]:
-                print(f"⚠️ Skipping '{sheet_name}' in {os.path.basename(file)} — column count mismatch.")
-                continue
+            headers_df = pd.read_excel(file, sheet_name=sheet_name, skiprows=3, nrows=1, header=None, engine="openpyxl")
+            headers = headers_df.iloc[0].tolist()
 
             df.columns = headers
             merged_data[sheet_name].append(df)
@@ -79,18 +76,16 @@ print(f"✅ Master template saved as '{output_file}'")
 # -------- Mapping Check --------
 print("\n🔍 Checking mapping file...")
 
-# Read master file Account Holder sheet (header row 4, data from row 9)
+# Read master Account Holder sheet
 master_df = pd.read_excel(output_file, sheet_name="Account Holder", skiprows=8, header=None, engine="openpyxl")
-master_headers = pd.read_excel(output_file, sheet_name="Account Holder", skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
+master_headers_df = pd.read_excel(output_file, sheet_name="Account Holder", skiprows=3, nrows=1, header=None, engine="openpyxl")
+master_headers = master_headers_df.iloc[0].tolist()
 master_df.columns = master_headers
 
-# Read mapping file (same structure: header at row 4, data from row 9)
+# Read mapping file
 mapping_df = pd.read_excel(mapping_file, skiprows=8, header=None, engine="openpyxl")
-mapping_headers = pd.read_excel(mapping_file, skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
-
-if len(mapping_headers) != mapping_df.shape[1]:
-    raise Exception("❌ Mapping file column count mismatch between header and data.")
-
+mapping_headers_df = pd.read_excel(mapping_file, skiprows=3, nrows=1, header=None, engine="openpyxl")
+mapping_headers = mapping_headers_df.iloc[0].tolist()
 mapping_df.columns = mapping_headers
 
 # Ensure required columns exist
@@ -106,9 +101,9 @@ mapping_df["Status"] = mapping_df.apply(
     lambda row: (row["Account Number"], row["Customer ID"]) in master_keys, axis=1
 )
 
-# Export updated mapping file
+# Save updated mapping file
 mapping_df.to_excel(output_mapping_file, index=False)
-print(f"✅ Mapping file updated with 'Status' column → {output_mapping_file}")
+print(f"✅ Mapping file updated → {output_mapping_file}")
 
 # Export unmatched records
 unmatched_df = mapping_df[~mapping_df["Status"]]
