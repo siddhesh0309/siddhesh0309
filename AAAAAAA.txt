@@ -8,25 +8,20 @@ from glob import glob
 template_folder = "Templates"
 master_template = "master_template.xlsm"
 output_file = "updated_master_template.xlsm"
-mapping_file = "mapping.xlsx"
+mapping_file = "mapping_file.xlsx"
+output_mapping_file = "updated_mapping_file.xlsx"
+unmatched_output_file = "unmatched_records.xlsx"
 
-# Sheet settings: headers at row 4 (skiprows=3), data starts at row 9 (skiprows=8)
+# Target sheets
 sheets = {
     "Account Holder": {"skiprows": 8},
     "Controlling Person": {"skiprows": 8}
 }
 
-# Container for merged data
+# Store merged data per sheet
 merged_data = {sheet: [] for sheet in sheets}
 
-# ✅ Load mapping file (headers in row 4, data starts from row 9)
-print("📘 Reading mapping file...")
-mapping_df = pd.read_excel(mapping_file, skiprows=3, engine="openpyxl")
-mapping_df = mapping_df.iloc[5:].reset_index(drop=True)  # Skip to data from row 9
-mapping_df = mapping_df.astype(str)
-mapping_set = set(zip(mapping_df["Account Number"], mapping_df["Customer ID"]))
-
-# 📥 Read all template files
+# Gather all template files
 files = glob(os.path.join(template_folder, "*.xlsm"))
 
 print("📥 Reading template files...")
@@ -41,7 +36,6 @@ for file in files:
                 print(f"⚠️ Skipping '{sheet_name}' in {os.path.basename(file)} — no data found after row 8.")
                 continue
 
-            # Get headers from row 4
             headers = pd.read_excel(file, sheet_name=sheet_name, skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
 
             if len(headers) != df.shape[1]:
@@ -49,17 +43,16 @@ for file in files:
                 continue
 
             df.columns = headers
-            df = df.astype(str)
             merged_data[sheet_name].append(df)
 
         except Exception as e:
             print(f"❌ Error reading '{sheet_name}' in {os.path.basename(file)}: {e}")
 
-# ✍️ Load master template
+# Load master template (preserve macros)
 print("✍️ Loading master template...")
 wb = load_workbook(master_template, keep_vba=True)
 
-# 🔁 Write to each sheet
+# Write merged data into each sheet
 for sheet_name in sheets:
     if sheet_name not in wb.sheetnames:
         print(f"❌ Sheet '{sheet_name}' not found in master template. Skipping.")
@@ -70,26 +63,57 @@ for sheet_name in sheets:
         continue
 
     ws = wb[sheet_name]
-    start_row = 9  # Write after header
+    start_row = 9  # Data begins after header
 
-    # Combine and map
     full_df = pd.concat(merged_data[sheet_name], ignore_index=True)
 
-    # ✅ Add Status column
-    if {"Account Number", "Customer ID"}.issubset(full_df.columns):
-        full_df["Status"] = full_df.apply(
-            lambda row: "TRUE" if (row["Account Number"], row["Customer ID"]) in mapping_set else "FALSE",
-            axis=1
-        )
-    else:
-        print(f"⚠️ Required columns not found in '{sheet_name}', skipping Status.")
-
-    # 📝 Write to Excel
     print(f"✍️ Writing {len(full_df)} rows to '{sheet_name}'...")
     for r_idx, row in enumerate(dataframe_to_rows(full_df, index=False, header=False), start=start_row):
         for c_idx, value in enumerate(row, start=1):
             ws.cell(row=r_idx, column=c_idx, value=value)
 
-# 💾 Save result
+# Save updated master file
 wb.save(output_file)
 print(f"✅ Master template saved as '{output_file}'")
+
+# -------- Mapping Check --------
+print("\n🔍 Checking mapping file...")
+
+# Read master file Account Holder sheet (header row 4, data from row 9)
+master_df = pd.read_excel(output_file, sheet_name="Account Holder", skiprows=8, header=None, engine="openpyxl")
+master_headers = pd.read_excel(output_file, sheet_name="Account Holder", skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
+master_df.columns = master_headers
+
+# Read mapping file (same structure: header at row 4, data from row 9)
+mapping_df = pd.read_excel(mapping_file, skiprows=8, header=None, engine="openpyxl")
+mapping_headers = pd.read_excel(mapping_file, skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
+
+if len(mapping_headers) != mapping_df.shape[1]:
+    raise Exception("❌ Mapping file column count mismatch between header and data.")
+
+mapping_df.columns = mapping_headers
+
+# Ensure required columns exist
+required_columns = ["Account Number", "Customer ID"]
+if not all(col in master_df.columns for col in required_columns):
+    raise Exception("❌ 'Account Number' and 'Customer ID' must exist in master file.")
+if not all(col in mapping_df.columns for col in required_columns):
+    raise Exception("❌ 'Account Number' and 'Customer ID' must exist in mapping file.")
+
+# Compare and mark Status
+master_keys = set(zip(master_df["Account Number"], master_df["Customer ID"]))
+mapping_df["Status"] = mapping_df.apply(
+    lambda row: (row["Account Number"], row["Customer ID"]) in master_keys, axis=1
+)
+
+# Export updated mapping file
+mapping_df.to_excel(output_mapping_file, index=False)
+print(f"✅ Mapping file updated with 'Status' column → {output_mapping_file}")
+
+# Export unmatched records
+unmatched_df = mapping_df[~mapping_df["Status"]]
+if not unmatched_df.empty:
+    unmatched_df.to_excel(unmatched_output_file, index=False)
+    print(f"📤 Unmatched records saved to → {unmatched_output_file}")
+else:
+    print("✅ All mapping records matched. No unmatched records to save.")
