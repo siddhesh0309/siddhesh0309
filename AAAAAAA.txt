@@ -5,27 +5,28 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from glob import glob
 
 # Paths
-template_folder = "Templates"  # Folder with input templates
-master_template = "master_template.xlsm"  # Master file with macros
-output_file = "updated_master_template.xlsm"  # Final output file
-mapping_file = "mapping.xlsx"  # Mapping file with Account Number and Customer ID
+template_folder = "Templates"
+master_template = "master_template.xlsm"
+output_file = "updated_master_template.xlsm"
+mapping_file = "mapping.xlsx"
 
-# Sheets to process with row settings
+# Sheet settings: headers at row 4 (skiprows=3), data starts at row 9 (skiprows=8)
 sheets = {
     "Account Holder": {"skiprows": 8},
     "Controlling Person": {"skiprows": 8}
 }
 
-# Store merged data
+# Container for merged data
 merged_data = {sheet: [] for sheet in sheets}
 
-# Read mapping file
+# ✅ Load mapping file (headers in row 4, data starts from row 9)
 print("📘 Reading mapping file...")
-mapping_df = pd.read_excel(mapping_file, usecols=["Account Number", "Customer ID"])
-mapping_df = mapping_df.astype(str)  # Ensure string type for comparison
+mapping_df = pd.read_excel(mapping_file, skiprows=3, engine="openpyxl")
+mapping_df = mapping_df.iloc[5:].reset_index(drop=True)  # Skip to data from row 9
+mapping_df = mapping_df.astype(str)
 mapping_set = set(zip(mapping_df["Account Number"], mapping_df["Customer ID"]))
 
-# Gather all template files
+# 📥 Read all template files
 files = glob(os.path.join(template_folder, "*.xlsm"))
 
 print("📥 Reading template files...")
@@ -40,6 +41,7 @@ for file in files:
                 print(f"⚠️ Skipping '{sheet_name}' in {os.path.basename(file)} — no data found after row 8.")
                 continue
 
+            # Get headers from row 4
             headers = pd.read_excel(file, sheet_name=sheet_name, skiprows=3, nrows=1, engine="openpyxl").columns.tolist()
 
             if len(headers) != df.shape[1]:
@@ -47,16 +49,17 @@ for file in files:
                 continue
 
             df.columns = headers
+            df = df.astype(str)
             merged_data[sheet_name].append(df)
 
         except Exception as e:
             print(f"❌ Error reading '{sheet_name}' in {os.path.basename(file)}: {e}")
 
-# Load master template (preserve macros)
+# ✍️ Load master template
 print("✍️ Loading master template...")
 wb = load_workbook(master_template, keep_vba=True)
 
-# Write merged data into each sheet
+# 🔁 Write to each sheet
 for sheet_name in sheets:
     if sheet_name not in wb.sheetnames:
         print(f"❌ Sheet '{sheet_name}' not found in master template. Skipping.")
@@ -67,25 +70,26 @@ for sheet_name in sheets:
         continue
 
     ws = wb[sheet_name]
-    start_row = 9  # Data starts from row 9
+    start_row = 9  # Write after header
 
-    # Combine all collected data for the sheet
+    # Combine and map
     full_df = pd.concat(merged_data[sheet_name], ignore_index=True)
 
-    # Add Status column based on mapping match
+    # ✅ Add Status column
     if {"Account Number", "Customer ID"}.issubset(full_df.columns):
         full_df["Status"] = full_df.apply(
-            lambda row: "TRUE" if (str(row["Account Number"]), str(row["Customer ID"])) in mapping_set else "FALSE",
+            lambda row: "TRUE" if (row["Account Number"], row["Customer ID"]) in mapping_set else "FALSE",
             axis=1
         )
     else:
-        print(f"⚠️ 'Account Number' and 'Customer ID' not found in '{sheet_name}', skipping Status column.")
+        print(f"⚠️ Required columns not found in '{sheet_name}', skipping Status.")
 
+    # 📝 Write to Excel
     print(f"✍️ Writing {len(full_df)} rows to '{sheet_name}'...")
     for r_idx, row in enumerate(dataframe_to_rows(full_df, index=False, header=False), start=start_row):
         for c_idx, value in enumerate(row, start=1):
             ws.cell(row=r_idx, column=c_idx, value=value)
 
-# Save the updated master file
+# 💾 Save result
 wb.save(output_file)
 print(f"✅ Master template saved as '{output_file}'")
