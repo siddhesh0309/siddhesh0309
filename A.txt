@@ -1,47 +1,7 @@
-try:
-                result = response.json()
-            except ValueError:
-                result = {"raw_response": response.text}
+from datetime import datetime, date
 
-            return result, response.status_code
-
-        except Exception as e:
-            return {"error": str(e)}, 400
-
-
-openssl pkcs12 -in keystore.p12 -cacerts -nokeys -out chain.pem
-
-
-
-
-keytool -importkeystore \
-  -srckeystore your_keystore.jks \
-  -srcstoretype JKS \
-  -destkeystore keystore.p12 \
-  -deststoretype PKCS12 \
-  -srcstorepass 
-Here’s a professional email you can use to reach out to the eWay Bill API team:
-
-⸻
-
-Subject: Assistance Required for eWay Bill Get Bill Details API Setup
-
-Dear [eWay Bill API Support Team / Team Name],
-
-We have gone through the documentation for the eWay Bill – Get Bill Details API and are interested in integrating it into our system.
-
-Could you please assist us with the setup process, specifically the request payload format that includes the Client ID and Client Secret?
-
-We would also be happy to get on a call for a walkthrough or clarification, if needed.
-
-Looking forward to your support.
-
-Best regards,
-Siddhesh Parkhe
-[Your Company Name]
-[Your Contact Information]
-
-⸻
-
-Let me know if you’d like to include any attachments or specific details like your GSTIN or IP whitelisting request.
-
+def format_date_column(sheet, column_number, date_format="DD-MMM-YY"):
+    for row in sheet.iter_rows(min_row=3, min_col=column_number, max_col=column_number):
+        for cell in row:
+            if isinstance(cell.value, (datetime, date)):
+                cell.number_format = date_format
