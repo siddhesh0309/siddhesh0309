@@ -1,7 +1,15 @@
 from datetime import datetime, date
 
-def format_date_column(sheet, column_number, date_format="DD-MMM-YY"):
+def format_date_column(sheet, column_number, date_format="DDMMMyyyy"):
     for row in sheet.iter_rows(min_row=3, min_col=column_number, max_col=column_number):
         for cell in row:
-            if isinstance(cell.value, (datetime, date)):
+            val = cell.value
+            if isinstance(val, str):
+                try:
+                    parsed = datetime.strptime(val.strip(), "%d%b%Y")
+                    cell.value = parsed
+                    cell.number_format = date_format
+                except:
+                    continue
+            elif isinstance(val, (datetime, date)):
                 cell.number_format = date_format
