@@ -1,55 +1,67 @@
 import pandas as pd
 
-# Define keyword to standardized name
-column_mappings = {
-    'deductee': 'deducted',
-    'decutee': 'deducted',
-    'deducted': 'deducted',
-    'ebn': 'ebn',
-    'status': 'status',
-    'email': 'email',
-    'pan': 'pan'  # ✅ added pan mapping
+# Define which columns to read and rename
+res_columns = {
+    'Pan deductee(514)': 'pan',
+    'Pan deductee name(514)': 'pan_name',
+    'Deductee code (514)': 'deductee_code',
+    'Email': 'email',
+    'Customer id': 'customer_id',
+    'Ebn': 'ebn'
 }
 
-def extract_relevant_columns_xlsb(file_path):
-    df = pd.read_excel(file_path, engine='pyxlsb', header=1)
-    df.columns = [str(col).strip() for col in df.columns]
+nonres_columns = {
+    'Pan deductee(517)': 'pan',
+    'Pan deductee name(517)': 'pan_name',
+    'Decutee code(517)': 'deductee_code',
+    'Email': 'email',
+    'Customer id': 'customer_id',
+    'Ebn': 'ebn'
+}
 
-    selected_columns = []
-    rename_map = {}
-    found_targets = set()
+# Efficient reader for required columns only
+def read_filtered_xlsb(file_path, col_map):
+    cols = list(col_map.keys())
+    df = pd.read_excel(file_path, engine='pyxlsb', usecols=cols)
+    df = df.rename(columns=col_map)
+    return df
 
-    for col in df.columns:
-        col_lower = col.lower()
+# Read both files
+print("Reading res.xlsb...")
+res_df = read_filtered_xlsb('res.xlsb', res_columns)
+print("Reading non res.xlsb...")
+nonres_df = read_filtered_xlsb('non res.xlsb', nonres_columns)
 
-        for keyword, target_name in column_mappings.items():
-            if keyword in col_lower and target_name not in found_targets:
-                selected_columns.append(col)
-                rename_map[col] = target_name
-                found_targets.add(target_name)
-                break
+# Combine both
+combined_df = pd.concat([res_df, nonres_df], ignore_index=True)
 
-        if len(found_targets) == len(set(column_mappings.values())):
-            break  # Stop early if all needed columns found
+# Step 1: Missing PANs (blank, NaN, "na")
+missing_pan_df = combined_df[
+    combined_df['pan'].isna() |
+    (combined_df['pan'].astype(str).str.strip().str.lower().isin(['', 'na']))
+].reset_index(drop=True)
 
-    if not selected_columns:
-        print(f"⚠️ No matching columns found in {file_path}")
-        return pd.DataFrame()
+# Step 2: Valid PANs
+valid_pan_df = combined_df[
+    ~(combined_df['pan'].isna() |
+      combined_df['pan'].astype(str).str.strip().str.lower().isin(['', 'na']))
+]
 
-    return df[selected_columns].rename(columns=rename_map)
+# Step 3: Unique PANs (drop duplicates)
+unique_pan_df = valid_pan_df.drop_duplicates(subset='pan').reset_index(drop=True)
 
-# Process both XLSB files
-df_res = extract_relevant_columns_xlsb("res.xlsb")
-df_nres = extract_relevant_columns_xlsb("nres.xlsb")
+# Step 4: Deductee code ends with '02' and ebn == 'N'
+filtered_df = unique_pan_df[
+    unique_pan_df['deductee_code'].astype(str).str.endswith('02') &
+    (unique_pan_df['ebn'].astype(str).str.strip().upper() == 'N')
+]
 
-# Combine data
-combined_df = pd.concat([df_res, df_nres], ignore_index=True)
+# ✅ Output preview
+print(f"✅ Total records loaded: {len(combined_df)}")
+print(f"❌ Missing PANs: {len(missing_pan_df)}")
+print(f"✅ Unique PANs: {len(unique_pan_df)}")
+print(f"🎯 Filtered (deductee_code endswith '02' & ebn == 'N'): {len(filtered_df)}")
 
-# Remove duplicates by PAN
-if 'pan' in combined_df.columns:
-    combined_df_unique = combined_df.drop_duplicates(subset='pan', keep='first')
-    print(f"✅ Total unique PANs: {len(combined_df_unique)}")
-    combined_df_unique.to_excel("unique_pan_data.xlsx", index=False)
-    print("📁 Saved as 'unique_pan_data.xlsx'")
-else:
-    print("❌ PAN column not found in combined data.")
+# Optionally save in chunks
+# unique_pan_df.to_csv("unique_pan.csv", index=False)
+# filtered_df.to_csv("filtered_deductee02_N.csv", index=False)
