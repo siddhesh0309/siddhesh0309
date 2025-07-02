@@ -1,82 +1,118 @@
-import fitz  # PyMuPDF
-import cv2
-import numpy as np
-import os
 import pandas as pd
+import os
+import subprocess
+from tqdm import tqdm
 
-def extract_second_table(image_path, debug=False):
-    img = cv2.imread(image_path)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.bitwise_not(gray)
-    _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+# === FOLDER PATHS ===
+res_file = 'res.xlsb'
+nonres_file = 'non res.xlsb'
+certificate_folder = 'certificate'
+rbwm_folder = 'rbwm'
+email_rb_folder = 'Email_RB'
+physical_rb_folder = 'Physical_RB'
 
-    # Detect lines
-    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
-    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
-    horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-    vertical_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
-    table_mask = cv2.add(horizontal_lines, vertical_lines)
+# === COLUMN MAPPINGS ===
+res_columns = {
+    'Pan deductee(514)': 'pan',
+    'Pan deductee name(514)': 'pan_name',
+    'Deductee code (514)': 'deductee_code',
+    'Email': 'email',
+    'Customer id': 'customer_id',
+    'Ebn': 'ebn'
+}
 
-    # Detect contours
-    contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    bounding_boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > 30 and cv2.boundingRect(c)[3] > 20]
-    bounding_boxes = sorted(bounding_boxes, key=lambda b: b[1])  # Top-down
+nonres_columns = {
+    'Pan deductee(517)': 'pan',
+    'Pan deductee name(517)': 'pan_name',
+    'Decutee code(517)': 'deductee_code',
+    'Email': 'email',
+    'Customer id': 'customer_id',
+    'Ebn': 'ebn'
+}
 
-    # Group into table blocks
-    tables = []
-    current_table = []
-    last_y = -999
-    for box in bounding_boxes:
-        x, y, w, h = box
-        if abs(y - last_y) > 60 and current_table:
-            tables.append(current_table)
-            current_table = []
-        current_table.append(box)
-        last_y = y
-    if current_table:
-        tables.append(current_table)
+# === HELPER FUNCTIONS ===
+def read_filtered_xlsb(file_path, col_map):
+    cols = list(col_map.keys())
+    df = pd.read_excel(file_path, engine='pyxlsb', usecols=cols)
+    df = df.rename(columns=col_map)
+    return df
 
-    if debug:
-        print(f"Detected tables: {len(tables)}")
-        for i, table in enumerate(tables):
-            print(f"  Table {i+1}: {len(table)} boxes")
+def robocopy_copy(source_folder, target_folder, filename):
+    cmd = [
+        "robocopy",
+        source_folder,
+        target_folder,
+        filename,
+        "/COPY:D",
+        "/R:1",
+        "/W:1",
+        "/NFL", "/NDL", "/NP", "/NJH", "/NJS",
+        "/Z",
+        "/LOG:NUL"
+    ]
+    subprocess.run(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if len(tables) >= 2:
-        second_table = tables[1]
-        # Group rows by Y-coordinate bins
-        sorted_rows = {}
-        for x, y, w, h in second_table:
-            center_y = y + h // 2
-            row_key = center_y // 25
-            sorted_rows.setdefault(row_key, []).append((x, y, w, h))
+# === LOAD & MERGE DATA ===
+print("📥 Reading files...")
+res_df = read_filtered_xlsb(res_file, res_columns)
+nonres_df = read_filtered_xlsb(nonres_file, nonres_columns)
+combined_df = pd.concat([res_df, nonres_df], ignore_index=True)
 
-        output_rows = []
-        for key in sorted(sorted_rows.keys()):
-            row = sorted(sorted_rows[key], key=lambda b: b[0])  # left to right
-            if len(row) > 1:  # avoid noisy rows
-                output_rows.append(["" for _ in row])
+# === CLEAN PAN DATA ===
+combined_df['pan'] = combined_df['pan'].astype(str).str.strip().str.upper()
+valid_pan_df = combined_df[
+    ~combined_df['pan'].str.lower().isin(['', 'na', 'nana'])
+]
+unique_pan_df = valid_pan_df.drop_duplicates(subset='pan').reset_index(drop=True)
 
-        return output_rows if output_rows else None
-    return None
+# === 1. filtered_df: deductee_code ends with 02/2 and ebn == 'N'
+filtered_df = unique_pan_df[
+    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
+    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() == 'N')
+]
 
-# Main: convert first 3 pages and extract second table
-pdf_path = "your_file.pdf"
-doc = fitz.open(pdf_path)
+# === 2. emailing_df: deductee_code ends with 02/2 and ebn != 'N' and email present
+emailing_df = unique_pan_df[
+    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
+    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() != 'N') &
+    (~unique_pan_df['email'].astype(str).str.strip().str.lower().isin(['', 'na']))
+]
 
-for page_number in range(min(3, len(doc))):
-    page = doc.load_page(page_number)
-    pix = page.get_pixmap(dpi=300)
-    image_path = f"page_{page_number + 1}.jpg"
-    pix.save(image_path)
+# === 3. physicalrb_df: deductee_code ends with 02/2 and ebn != 'N' and email missing
+physicalrb_df = unique_pan_df[
+    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
+    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() != 'N') &
+    (unique_pan_df['email'].astype(str).str.strip().str.lower().isin(['', 'na']))
+]
 
-    table_data = extract_second_table(image_path, debug=True)
+print(f"✅ Filtered (ebn == 'N')       → rbwm        : {len(filtered_df)}")
+print(f"📧 Emailing (ebn != 'N' + email) → Email_RB    : {len(emailing_df)}")
+print(f"📦 Physical (ebn != 'N' + no email) → Physical_RB : {len(physicalrb_df)}")
 
-    if table_data:
-        df = pd.DataFrame(table_data)
-        output_path = f"second_table_page{page_number + 1}.xlsx"
-        df.to_excel(output_path, index=False, header=False)
-        print(f"Saved: {output_path}")
-    else:
-        print(f"Page {page_number + 1}: Second table not detected or has no valid rows.")
+# === CREATE OUTPUT FOLDERS ===
+os.makedirs(rbwm_folder, exist_ok=True)
+os.makedirs(email_rb_folder, exist_ok=True)
+os.makedirs(physical_rb_folder, exist_ok=True)
 
-    os.remove(image_path)
+# === COPY PDFs FOR rbwm ===
+print("📁 Copying PDFs to rbwm...")
+for pan in tqdm(filtered_df['pan'].astype(str).str.strip().str.upper().unique(), desc="RBWM PDFs"):
+    filename = f"{pan}_Q4.pdf"
+    if os.path.exists(os.path.join(certificate_folder, filename)):
+        robocopy_copy(certificate_folder, rbwm_folder, filename)
+
+# === COPY PDFs FOR Email_RB ===
+print("📤 Copying PDFs to Email_RB...")
+for pan in tqdm(emailing_df['pan'].astype(str).str.strip().str.upper().unique(), desc="Emailing PDFs"):
+    filename = f"{pan}_Q4.pdf"
+    if os.path.exists(os.path.join(certificate_folder, filename)):
+        robocopy_copy(certificate_folder, email_rb_folder, filename)
+
+# === COPY PDFs FOR Physical_RB ===
+print("📦 Copying PDFs to Physical_RB...")
+for pan in tqdm(physicalrb_df['pan'].astype(str).str.strip().str.upper().unique(), desc="Physical RB PDFs"):
+    filename = f"{pan}_Q4.pdf"
+    if os.path.exists(os.path.join(certificate_folder, filename)):
+        robocopy_copy(certificate_folder, physical_rb_folder, filename)
+
+print("✅ All matching PDFs copied successfully.")
