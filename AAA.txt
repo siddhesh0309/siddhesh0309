@@ -1,38 +1,120 @@
-# Clean columns
-df_template['Customer ID'] = df_template['Customer ID'].astype(str).str.strip()
-df_template['Account Number'] = df_template['Account Number'].astype(str).str.strip()
-df_mapping['Customer ID'] = df_mapping['Customer ID'].astype(str).str.strip()
-df_mapping['Account Number'] = df_mapping['Account Number'].astype(str).str.strip()
+import pandas as pd
+import os
+import subprocess
+import time
+from tqdm import tqdm
 
-# Drop duplicates
-df_mapping_cust = df_mapping.drop_duplicates(subset='Customer ID', keep='first')
-df_mapping_acc = df_mapping.drop_duplicates(subset='Account Number', keep='first')
+# === CONFIGURATION ===
+res_file = 'res.xlsb'
+nonres_file = 'non res.xlsb'
+certificate_folder = 'certificate'
+output_folder = 'rbwm'
+file_list_txt = 'files_to_move.txt'
+log_file = 'robocopy.log'
 
-# Step 1: Merge OCC_DESC_DEC23 and GHO_DEC23 using Customer ID
-lookup = df_mapping_cust[['Customer ID', 'OCC_DESC_DEC23', 'GHO_DEC23']]
-merged = df_template[['Customer ID']].merge(lookup, on='Customer ID', how='left')
+# === COLUMN MAPPINGS ===
+res_columns = {
+    'Pan deductee(514)': 'pan',
+    'Pan deductee name(514)': 'pan_name',
+    'Deductee code (514)': 'deductee_code',
+    'Email': 'email',
+    'Customer id': 'customer_id',
+    'Ebn': 'ebn'
+}
 
-df_template['OCC_DESC_DEC23'] = merged['OCC_DESC_DEC23']
-df_template['GHO_DEC23'] = merged['GHO_DEC23']
+nonres_columns = {
+    'Pan deductee(517)': 'pan',
+    'Pan deductee name(517)': 'pan_name',
+    'Decutee code(517)': 'deductee_code',
+    'Email': 'email',
+    'Customer id': 'customer_id',
+    'Ebn': 'ebn'
+}
 
-# Step 2: Map ACC_STATUS_DEC23 using Account Number (directly update df_template)
-acc_status_dict = df_mapping_acc.set_index('Account Number')['ACC_STATUS_DEC23'].to_dict()
-df_template['ACC_STATUS_DEC23'] = df_template['Account Number'].map(acc_status_dict)
+# === READ .XLSB FUNCTION ===
+def read_filtered_xlsb(file_path, col_map):
+    cols = list(col_map.keys())
+    df = pd.read_excel(file_path, engine='pyxlsb', usecols=cols)
+    df = df.rename(columns=col_map)
+    return df
 
+# === LOAD AND MERGE DATA ===
+print("📥 Reading files...")
+res_df = read_filtered_xlsb(res_file, res_columns)
+nonres_df = read_filtered_xlsb(nonres_file, nonres_columns)
+combined_df = pd.concat([res_df, nonres_df], ignore_index=True)
 
+# === CLEAN AND FILTER PAN DATA ===
+combined_df['pan'] = combined_df['pan'].astype(str).str.strip().str.upper()
+valid_pan_df = combined_df[
+    ~combined_df['pan'].str.lower().isin(['', 'na', 'nana'])
+]
+unique_pan_df = valid_pan_df.drop_duplicates(subset='pan').reset_index(drop=True)
 
+# === FILTER REQUIRED ROWS ===
+filtered_df = unique_pan_df[
+    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
+    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() == 'N')
+]
 
+print(f"✅ Filtered PANs: {len(filtered_df)}")
 
+# === CREATE OUTPUT FOLDER IF NEEDED ===
+os.makedirs(output_folder, exist_ok=True)
 
+# === BUILD FILE LIST FOR ROBOCOPY ===
+print("🔍 Searching for matching PDFs...")
+available_files = set(os.listdir(certificate_folder))
+matched_files = []
 
-Sure! Here’s a simplified version without technical logic, focused on the value and purpose of the solution:
+for pan in filtered_df['pan'].unique():
+    filename = f"{pan}_Q4.pdf"
+    if filename in available_files:
+        matched_files.append(filename)
 
-⸻
+# === SAVE TO TXT FILE ===
+with open(file_list_txt, "w") as f:
+    for file in matched_files:
+        f.write(file + '\n')
 
-Automated Occupation Classification and Data Integrity: This solution streamlines the enrichment of customer records by automatically classifying occupations based on predefined rules, improving data quality and consistency. It ensures that occupation information is updated accurately while reducing manual effort, enhancing compliance with regulatory standards. The process also maintains a clear audit trail, enabling easy validation and supporting reliable reporting to internal stakeholders and regulatory authorities.
+total_files = len(matched_files)
+print(f"📄 Total files to move: {total_files}")
 
-To address the high volume of manual exceptions in India’s 2024 FATCA and CRS reporting, I developed an automated utility designed to streamline exception handling and align data with country-specific schema requirements. This solution bridges the gap between HUB’s data limitations and the mandatory reporting fields by enriching, validating, and transforming the data as per regulatory expectations. As a result, the utility significantly reduces manual intervention, improves reporting accuracy, and enhances overall compliance readiness for FATCA and CRS submissions.
+# === START ROBOCOPY ===
+print("🚀 Starting robocopy...")
+robocopy_cmd = [
+    "robocopy",
+    certificate_folder,
+    output_folder,
+    "/MOV",
+    "/R:2",
+    "/W:1",
+    "/MT:16",
+    "/ZB",
+    f"/LOG:{log_file}",
+    "/NJH",
+    "/NJS",
+    "/NP",
+    "/TEE",
+    f"/FILELIST:{file_list_txt}"
+]
 
+# Start robocopy asynchronously
+process = subprocess.Popen(" ".join(robocopy_cmd), shell=True)
 
+# Monitor progress
+with tqdm(total=total_files, desc="Moving PDFs", unit="file") as pbar:
+    already_moved = set()
+    while process.poll() is None:  # While robocopy is running
+        current_files = set(os.listdir(output_folder))
+        new_moved = current_files - already_moved
+        pbar.update(len(new_moved))
+        already_moved = current_files
+        time.sleep(2)  # check every 2 seconds
 
+    # Final check in case some moved after last check
+    current_files = set(os.listdir(output_folder))
+    pbar.update(len(current_files - already_moved))
 
+# Done
+print("✅ Robocopy finished.")
