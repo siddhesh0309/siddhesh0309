@@ -1,118 +1,12 @@
-import pandas as pd
-import os
-import subprocess
-from tqdm import tqdm
-
-# === FOLDER PATHS ===
-res_file = 'res.xlsb'
-nonres_file = 'non res.xlsb'
-certificate_folder = 'certificate'
-rbwm_folder = 'rbwm'
-email_rb_folder = 'Email_RB'
-physical_rb_folder = 'Physical_RB'
-
-# === COLUMN MAPPINGS ===
-res_columns = {
-    'Pan deductee(514)': 'pan',
-    'Pan deductee name(514)': 'pan_name',
-    'Deductee code (514)': 'deductee_code',
-    'Email': 'email',
-    'Customer id': 'customer_id',
-    'Ebn': 'ebn'
-}
-
-nonres_columns = {
-    'Pan deductee(517)': 'pan',
-    'Pan deductee name(517)': 'pan_name',
-    'Decutee code(517)': 'deductee_code',
-    'Email': 'email',
-    'Customer id': 'customer_id',
-    'Ebn': 'ebn'
-}
-
-# === HELPER FUNCTIONS ===
-def read_filtered_xlsb(file_path, col_map):
-    cols = list(col_map.keys())
-    df = pd.read_excel(file_path, engine='pyxlsb', usecols=cols)
-    df = df.rename(columns=col_map)
-    return df
-
-def robocopy_copy(source_folder, target_folder, filename):
-    cmd = [
-        "robocopy",
-        source_folder,
-        target_folder,
-        filename,
-        "/COPY:D",
-        "/R:1",
-        "/W:1",
-        "/NFL", "/NDL", "/NP", "/NJH", "/NJS",
-        "/Z",
-        "/LOG:NUL"
-    ]
-    subprocess.run(" ".join(cmd), shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-# === LOAD & MERGE DATA ===
-print("📥 Reading files...")
-res_df = read_filtered_xlsb(res_file, res_columns)
-nonres_df = read_filtered_xlsb(nonres_file, nonres_columns)
-combined_df = pd.concat([res_df, nonres_df], ignore_index=True)
-
-# === CLEAN PAN DATA ===
-combined_df['pan'] = combined_df['pan'].astype(str).str.strip().str.upper()
-valid_pan_df = combined_df[
-    ~combined_df['pan'].str.lower().isin(['', 'na', 'nana'])
-]
-unique_pan_df = valid_pan_df.drop_duplicates(subset='pan').reset_index(drop=True)
-
-# === 1. filtered_df: deductee_code ends with 02/2 and ebn == 'N'
-filtered_df = unique_pan_df[
-    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
-    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() == 'N')
+month_key = start.strftime('%b-%Y')  # e.g., Jul-2025
+config = config_df[
+    (config_df['Customer Name'].str.lower() == customer.lower()) &
+    (config_df['Month'].str.lower() == month_key.lower())
 ]
 
-# === 2. emailing_df: deductee_code ends with 02/2 and ebn != 'N' and email present
-emailing_df = unique_pan_df[
-    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
-    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() != 'N') &
-    (~unique_pan_df['email'].astype(str).str.strip().str.lower().isin(['', 'na']))
-]
+if config.empty:
+    print(f"Skipping {customer} for {month_key}: no config found.")
+    continue
 
-# === 3. physicalrb_df: deductee_code ends with 02/2 and ebn != 'N' and email missing
-physicalrb_df = unique_pan_df[
-    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
-    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() != 'N') &
-    (unique_pan_df['email'].astype(str).str.strip().str.lower().isin(['', 'na']))
-]
-
-print(f"✅ Filtered (ebn == 'N')       → rbwm        : {len(filtered_df)}")
-print(f"📧 Emailing (ebn != 'N' + email) → Email_RB    : {len(emailing_df)}")
-print(f"📦 Physical (ebn != 'N' + no email) → Physical_RB : {len(physicalrb_df)}")
-
-# === CREATE OUTPUT FOLDERS ===
-os.makedirs(rbwm_folder, exist_ok=True)
-os.makedirs(email_rb_folder, exist_ok=True)
-os.makedirs(physical_rb_folder, exist_ok=True)
-
-# === COPY PDFs FOR rbwm ===
-print("📁 Copying PDFs to rbwm...")
-for pan in tqdm(filtered_df['pan'].astype(str).str.strip().str.upper().unique(), desc="RBWM PDFs"):
-    filename = f"{pan}_Q4.pdf"
-    if os.path.exists(os.path.join(certificate_folder, filename)):
-        robocopy_copy(certificate_folder, rbwm_folder, filename)
-
-# === COPY PDFs FOR Email_RB ===
-print("📤 Copying PDFs to Email_RB...")
-for pan in tqdm(emailing_df['pan'].astype(str).str.strip().str.upper().unique(), desc="Emailing PDFs"):
-    filename = f"{pan}_Q4.pdf"
-    if os.path.exists(os.path.join(certificate_folder, filename)):
-        robocopy_copy(certificate_folder, email_rb_folder, filename)
-
-# === COPY PDFs FOR Physical_RB ===
-print("📦 Copying PDFs to Physical_RB...")
-for pan in tqdm(physicalrb_df['pan'].astype(str).str.strip().str.upper().unique(), desc="Physical RB PDFs"):
-    filename = f"{pan}_Q4.pdf"
-    if os.path.exists(os.path.join(certificate_folder, filename)):
-        robocopy_copy(certificate_folder, physical_rb_folder, filename)
-
-print("✅ All matching PDFs copied successfully.")
+config = config.iloc[0]
+tbill, spread, tenor, roi = config['TBill Rate'], config['Spread'], config['Tenor'], config['ROI']
