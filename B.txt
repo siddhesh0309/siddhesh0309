@@ -1,22 +1,24 @@
-# Loop through each unique customer
 for customer in buyfp_df['Customer Normalized'].dropna().unique():
-    # Extract month for that customer's records (adjust this part if looping by date range)
-    for period in buyfp_df[buyfp_df['Customer Normalized'] == customer]['Date'].dt.to_period('M').unique():
-        sheet_name = period.strftime('%b')  # e.g., Jun, Jul
+    # Get all dates from both buyfp and vfin for this customer
+    buyfp_dates = buyfp_df[buyfp_df['Customer Normalized'] == customer]['Date']
+    vfin_dates = vfin_df[vfin_df['Customer Name'].str.lower().str.contains(customer.lower())]['Date']
+    
+    all_dates = pd.concat([buyfp_dates, vfin_dates]).dropna()
+
+    for period in all_dates.dt.to_period('M').unique():
+        sheet_name = period.strftime('%b-%Y')  # Example: "Jul-2025"
 
         try:
             config_df = pd.read_excel("customer_config.xlsx", sheet_name=sheet_name)
         except Exception:
-            print(f"Skipping {customer} for {sheet_name}: sheet not found in config.")
+            print(f"Skipping {customer} for {sheet_name}: Sheet not found.")
             continue
 
-        # Match on 'Customer' column
+        # Match customer in that sheet
         config = config_df[config_df['Customer'].str.lower() == customer.lower()]
         if config.empty:
-            print(f"Skipping {customer} for {sheet_name}: config not found.")
+            print(f"Skipping {customer} for {sheet_name}: Config not found.")
             continue
 
         config = config.iloc[0]
         tbill, spread, tenor, roi = config['TBILL RATE'], config['SPREAD'], config['TENOR'], config['ROI']
-
-        # Now apply tbill, spread, roi, etc. as needed for this month's processing
