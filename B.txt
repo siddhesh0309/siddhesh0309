@@ -1,7 +1,22 @@
-if 'Month' not in config_df.columns:
-        config_df['Month'] = pd.to_datetime(config_df['Date']).dt.strftime('%b-%Y')
+# Loop through each unique customer
+for customer in buyfp_df['Customer Normalized'].dropna().unique():
+    # Extract month for that customer's records (adjust this part if looping by date range)
+    for period in buyfp_df[buyfp_df['Customer Normalized'] == customer]['Date'].dt.to_period('M').unique():
+        sheet_name = period.strftime('%b')  # e.g., Jun, Jul
 
-    buyfp_df['Customer Normalized'] = (
-        buyfp_df['Customer Name'].str.strip().str.lower()
-        .map(customer_group_map)
-        .fillna(buyfp_df['Customer Name'])
+        try:
+            config_df = pd.read_excel("customer_config.xlsx", sheet_name=sheet_name)
+        except Exception:
+            print(f"Skipping {customer} for {sheet_name}: sheet not found in config.")
+            continue
+
+        # Match on 'Customer' column
+        config = config_df[config_df['Customer'].str.lower() == customer.lower()]
+        if config.empty:
+            print(f"Skipping {customer} for {sheet_name}: config not found.")
+            continue
+
+        config = config.iloc[0]
+        tbill, spread, tenor, roi = config['TBILL RATE'], config['SPREAD'], config['TENOR'], config['ROI']
+
+        # Now apply tbill, spread, roi, etc. as needed for this month's processing
