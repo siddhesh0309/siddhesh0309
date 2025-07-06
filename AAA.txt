@@ -1,120 +1,98 @@
 import pandas as pd
-import os
-import subprocess
-import time
-from tqdm import tqdm
+from pathlib import Path
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+import datetime
 
-# === CONFIGURATION ===
-res_file = 'res.xlsb'
-nonres_file = 'non res.xlsb'
-certificate_folder = 'certificate'
-output_folder = 'rbwm'
-file_list_txt = 'files_to_move.txt'
-log_file = 'robocopy.log'
+# --- Load inputs ---
+vfin_df = pd.read_excel("Vfin.xlsx")
+buyfp_df = pd.read_excel("buyfp.xlsx")
+config_path = "Customer Config.xlsx"
 
-# === COLUMN MAPPINGS ===
-res_columns = {
-    'Pan deductee(514)': 'pan',
-    'Pan deductee name(514)': 'pan_name',
-    'Deductee code (514)': 'deductee_code',
-    'Email': 'email',
-    'Customer id': 'customer_id',
-    'Ebn': 'ebn'
-}
+vfin_df['Date'] = pd.to_datetime(vfin_df['Date'])
+buyfp_df['Date'] = pd.to_datetime(buyfp_df['Date'])
 
-nonres_columns = {
-    'Pan deductee(517)': 'pan',
-    'Pan deductee name(517)': 'pan_name',
-    'Decutee code(517)': 'deductee_code',
-    'Email': 'email',
-    'Customer id': 'customer_id',
-    'Ebn': 'ebn'
-}
+output_dir = Path("Customer_Excels")
+output_dir.mkdir(exist_ok=True)
 
-# === READ .XLSB FUNCTION ===
-def read_filtered_xlsb(file_path, col_map):
-    cols = list(col_map.keys())
-    df = pd.read_excel(file_path, engine='pyxlsb', usecols=cols)
-    df = df.rename(columns=col_map)
-    return df
+# Helper: get config for a customer from correct sheet
+def get_customer_config(customer, date):
+    month_sheet = date.strftime("%b-%Y")  # Ex: Dec-2024
+    try:
+        sheet_df = pd.read_excel(config_path, sheet_name=month_sheet)
+        row = sheet_df[sheet_df['Customer'].str.lower() == customer.lower()]
+        if not row.empty:
+            return row.iloc[0].to_dict()
+    except Exception:
+        pass
+    return None
 
-# === LOAD AND MERGE DATA ===
-print("📥 Reading files...")
-res_df = read_filtered_xlsb(res_file, res_columns)
-nonres_df = read_filtered_xlsb(nonres_file, nonres_columns)
-combined_df = pd.concat([res_df, nonres_df], ignore_index=True)
+# For each customer
+for customer in buyfp_df['Customer Name'].dropna().unique():
+    cust_vfin = vfin_df[vfin_df['Customer Name'] == customer].copy()
+    cust_buyfp = buyfp_df[buyfp_df['Customer Name'] == customer].copy()
 
-# === CLEAN AND FILTER PAN DATA ===
-combined_df['pan'] = combined_df['pan'].astype(str).str.strip().str.upper()
-valid_pan_df = combined_df[
-    ~combined_df['pan'].str.lower().isin(['', 'na', 'nana'])
-]
-unique_pan_df = valid_pan_df.drop_duplicates(subset='pan').reset_index(drop=True)
+    # Inject config values
+    for idx, row in cust_buyfp.iterrows():
+        config = get_customer_config(customer, row['Date'])
+        if config:
+            cust_buyfp.at[idx, 'TBill Rate'] = config.get('TBill Rate')
+            cust_buyfp.at[idx, 'Spread'] = config.get('Spread')
+            cust_buyfp.at[idx, 'Tenor'] = config.get('Tenor')
 
-# === FILTER REQUIRED ROWS ===
-filtered_df = unique_pan_df[
-    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith(('02', '2')) &
-    (unique_pan_df['ebn'].astype(str).str.strip().str.upper() == 'N')
-]
+    for idx, row in cust_vfin.iterrows():
+        config = get_customer_config(customer, row['Date'])
+        if config:
+            roi = config.get('ROI')
+            tenor = config.get('Tenor')
+            amount = row.get('Amount')
+            # Add ROI and Interest
+            cust_vfin.at[idx, 'ROI'] = roi
+            if pd.notnull(amount) and pd.notnull(roi) and pd.notnull(tenor):
+                interest = round((amount * roi * tenor) / 36500, 2)
+                cust_vfin.at[idx, 'Interest Amount'] = interest
 
-print(f"✅ Filtered PANs: {len(filtered_df)}")
+    # Create / overwrite Master
+    with pd.ExcelWriter(output_dir / f"{customer}_Master.xlsx", engine="openpyxl", mode='w') as writer:
+        cust_vfin.to_excel(writer, index=False, sheet_name="vfin")
+        cust_buyfp.to_excel(writer, index=False, sheet_name="buyfp")
 
-# === CREATE OUTPUT FOLDER IF NEEDED ===
-os.makedirs(output_folder, exist_ok=True)
+    # --- Month-wise Processing ---
+    all_dates = pd.concat([cust_vfin['Date'], cust_buyfp['Date']]).dropna().dt.to_period("M").unique()
+    for period in all_dates:
+        month_start = period.to_timestamp()
+        month_end = month_start + pd.offsets.MonthEnd(0)
 
-# === BUILD FILE LIST FOR ROBOCOPY ===
-print("🔍 Searching for matching PDFs...")
-available_files = set(os.listdir(certificate_folder))
-matched_files = []
+        vfin_month = cust_vfin[(cust_vfin['Date'] >= month_start) & (cust_vfin['Date'] <= month_end)]
+        buyfp_month = cust_buyfp[(cust_buyfp['Date'] >= month_start) & (cust_buyfp['Date'] <= month_end)]
 
-for pan in filtered_df['pan'].unique():
-    filename = f"{pan}_Q4.pdf"
-    if filename in available_files:
-        matched_files.append(filename)
+        file_path = output_dir / f"{customer}_{period}.xlsx"
 
-# === SAVE TO TXT FILE ===
-with open(file_list_txt, "w") as f:
-    for file in matched_files:
-        f.write(file + '\n')
+        if not file_path.exists():
+            # Create fresh file
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                vfin_month.to_excel(writer, sheet_name="vfin", index=False)
+                buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
+        else:
+            wb = load_workbook(file_path)
+            writer = pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay')
+            writer.book = wb
 
-total_files = len(matched_files)
-print(f"📄 Total files to move: {total_files}")
+            # Append vfin
+            if 'vfin' in wb.sheetnames:
+                sheet = wb['vfin']
+                sheet.append([])  # blank row
+                for r in dataframe_to_rows(vfin_month, index=False, header=False):
+                    sheet.append(r)
+            else:
+                vfin_month.to_excel(writer, sheet_name="vfin", index=False)
 
-# === START ROBOCOPY ===
-print("🚀 Starting robocopy...")
-robocopy_cmd = [
-    "robocopy",
-    certificate_folder,
-    output_folder,
-    "/MOV",
-    "/R:2",
-    "/W:1",
-    "/MT:16",
-    "/ZB",
-    f"/LOG:{log_file}",
-    "/NJH",
-    "/NJS",
-    "/NP",
-    "/TEE",
-    f"/FILELIST:{file_list_txt}"
-]
+            # Overwrite buyfp
+            if 'buyfp' in wb.sheetnames:
+                wb.remove(wb['buyfp'])
+            buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
 
-# Start robocopy asynchronously
-process = subprocess.Popen(" ".join(robocopy_cmd), shell=True)
+            writer.save()
+            writer.close()
 
-# Monitor progress
-with tqdm(total=total_files, desc="Moving PDFs", unit="file") as pbar:
-    already_moved = set()
-    while process.poll() is None:  # While robocopy is running
-        current_files = set(os.listdir(output_folder))
-        new_moved = current_files - already_moved
-        pbar.update(len(new_moved))
-        already_moved = current_files
-        time.sleep(2)  # check every 2 seconds
-
-    # Final check in case some moved after last check
-    current_files = set(os.listdir(output_folder))
-    pbar.update(len(current_files - already_moved))
-
-# Done
-print("✅ Robocopy finished.")
+print("✅ Process complete.")
