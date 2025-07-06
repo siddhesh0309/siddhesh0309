@@ -1,3 +1,4 @@
+
 import pandas as pd
 from pathlib import Path
 from openpyxl import load_workbook
@@ -6,15 +7,14 @@ from datetime import datetime
 import re
 import os
 
-# User-provided zip file path to extract the date
+# Extract date for append from ZIP filename
 zip_file_path = "VFIN_06May2024.zip"
-date_for_append = Path(zip_file_path).stem.split("_")[1]  # e.g., '06May2024'
+date_for_append = Path(zip_file_path).stem.split("_")[1]
 
 # Load Excel files
 vfin_df = pd.read_excel("Vfin.xlsx")
 buyfp_df = pd.read_excel("buyfp.xlsx")
 
-# Convert date columns
 vfin_df['Date'] = pd.to_datetime(vfin_df['Date'], errors='coerce')
 buyfp_df['Date'] = pd.to_datetime(buyfp_df['Date'], errors='coerce')
 
@@ -32,7 +32,6 @@ buyfp_df['Customer Normalized'] = (
     .fillna(buyfp_df['Customer Name'])
 )
 
-# Output folder
 root_output = Path("Customer_Excels")
 root_output.mkdir(exist_ok=True)
 
@@ -42,44 +41,57 @@ for customer in buyfp_df['Customer Normalized'].dropna().unique():
     if 'Customer Normalized' in cust_buyfp.columns:
         cust_buyfp.drop(columns=['Customer Normalized'], inplace=True)
 
-    # Determine months from buyfp dates
-    all_dates = cust_buyfp["Date"].dropna().dt.to_period("M").unique()
-    for period in all_dates:
+    # Get sheet name from Date Approved column
+    cust_buyfp['Date Approved'] = pd.to_datetime(cust_buyfp['Date Approved'], errors='coerce')
+    valid_approval_dates = cust_buyfp['Date Approved'].dropna()
+
+    if valid_approval_dates.empty:
+        print(f"â ï¸ No valid Date Approved for {customer}")
+        continue
+
+    approval_date = valid_approval_dates.iloc[0]
+    sheet_name = approval_date.strftime('%b-%Y')
+
+    try:
+        config_df = pd.read_excel("customer_config.xlsx", sheet_name=sheet_name)
+    except Exception as e:
+        print(f"â Cannot load sheet {sheet_name} from customer_config.xlsx: {e}")
+        continue
+
+    config = config_df[config_df['Customer'].str.lower().str.contains(customer.lower())]
+    if config.empty:
+        print(f"â ï¸ No config found for {customer} in sheet {sheet_name}")
+        continue
+
+    config = config.iloc[0]
+    tbill, spread, tenor, roi = config['TBILL RATE'], config['SPREAD'], config['TENOR'], config['ROI']
+
+    cust_buyfp['Rate'] = tbill + spread
+    cust_buyfp['Interest Amount'] = round(cust_buyfp['Bill amount'] * cust_buyfp['Rate'] * tenor / 36500, 2)
+
+    if "badshah" in customer.lower():
+        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("badshah")].copy()
+    elif "exotic fruit" in customer.lower():
+        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("exotic fruit")].copy()
+    elif "arcemitthal" in customer.lower():
+        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("arcemitthal|arcemittal")].copy()
+    else:
+        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.strip() == customer.lower().strip()].copy()
+
+    cust_vfin['ROI'] = roi
+    principal_col = 'Amount' if 'Amount' in cust_vfin.columns else 'Principal'
+    cust_vfin['Interest Amount'] = round(cust_vfin[principal_col] * roi * 1 / 36500, 2)
+
+    all_dates = pd.concat([cust_vfin["Date"], cust_buyfp["Date"]]).dropna()
+    for period in all_dates.dt.to_period("M").unique():
         start = period.to_timestamp()
+        end = start + pd.offsets.MonthEnd(0)
+
+        vfin_month = cust_vfin[(cust_vfin["Date"] >= start) & (cust_vfin["Date"] <= end)]
+        buyfp_month = cust_buyfp[(cust_buyfp["Date"] >= start) & (cust_buyfp["Date"] <= end)]
+
         year_str = start.strftime('%Y')
         month_str = start.strftime('%b')
-
-        # Dynamically load correct sheet from config
-        sheet_name = f"{month_str}-{year_str}"
-        config_df = pd.read_excel("customer_config.xlsx", sheet_name=sheet_name)
-
-        config = config_df[config_df['Customer Name'].str.lower() == customer.lower()]
-        if config.empty:
-            continue
-        config = config.iloc[0]
-        tbill, spread, tenor, roi = config['TBill Rate'], config['Spread'], config['Tenor'], config['ROI']
-
-        cust_buyfp['Rate'] = tbill + spread
-        cust_buyfp['Interest Amount'] = round(cust_buyfp['Bill amount'] * cust_buyfp['Rate'] * tenor / 36500, 2)
-
-        # Match vfin
-        if "badshah" in customer.lower():
-            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("badshah")].copy()
-        elif "exotic fruit" in customer.lower():
-            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("exotic fruit")].copy()
-        elif "arcemitthal" in customer.lower():
-            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("arcemitthal|arcemittal")].copy()
-        else:
-            cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.strip() == customer.lower().strip()].copy()
-
-        cust_vfin['ROI'] = roi
-        principal_col = 'Amount' if 'Amount' in cust_vfin.columns else 'Principal'
-        cust_vfin['Interest Amount'] = round(cust_vfin[principal_col] * roi * 1 / 36500, 2)
-
-        # Filter vfin and buyfp by month
-        vfin_month = cust_vfin[(cust_vfin["Date"] >= start) & (cust_vfin["Date"] <= start + pd.offsets.MonthEnd(0))]
-        buyfp_month = cust_buyfp[(cust_buyfp["Date"] >= start) & (cust_buyfp["Date"] <= start + pd.offsets.MonthEnd(0))]
-
         customer_dir = root_output / customer / year_str / month_str
         customer_dir.mkdir(parents=True, exist_ok=True)
         file_path = customer_dir / f"{customer}_{month_str}.xlsx"
@@ -88,8 +100,6 @@ for customer in buyfp_df['Customer Normalized'].dropna().unique():
             with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
                 vfin_month.to_excel(writer, sheet_name="vfin", index=False)
                 buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
-
-            # Re-open and insert date row at top of vfin
             wb = load_workbook(file_path)
             ws = wb["vfin"]
             ws.insert_rows(1)
