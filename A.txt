@@ -1,67 +1,18 @@
-import pandas as pd
+    for period in all_dates.dt.to_period('M').unique():
+        sheet_name = period.strftime('%b-%Y')  # e.g., Dec-2024
+        start = period.to_timestamp()
+        end = start + pd.offsets.MonthEnd(0)
 
-# Define which columns to read and rename
-res_columns = {
-    'Pan deductee(514)': 'pan',
-    'Pan deductee name(514)': 'pan_name',
-    'Deductee code (514)': 'deductee_code',
-    'Email': 'email',
-    'Customer id': 'customer_id',
-    'Ebn': 'ebn'
-}
+        try:
+            config_df = pd.read_excel("customer_config.xlsx", sheet_name=sheet_name)
+        except:
+            print(f"⛔ Sheet {sheet_name} not found. Skipping {customer}.")
+            continue
 
-nonres_columns = {
-    'Pan deductee(517)': 'pan',
-    'Pan deductee name(517)': 'pan_name',
-    'Decutee code(517)': 'deductee_code',
-    'Email': 'email',
-    'Customer id': 'customer_id',
-    'Ebn': 'ebn'
-}
+        config = config_df[config_df['Customer'].str.lower() == customer.lower()]
+        if config.empty:
+            print(f"⛔ No config for {customer} in {sheet_name}. Skipping.")
+            continue
 
-# Efficient reader for required columns only
-def read_filtered_xlsb(file_path, col_map):
-    cols = list(col_map.keys())
-    df = pd.read_excel(file_path, engine='pyxlsb', usecols=cols)
-    df = df.rename(columns=col_map)
-    return df
-
-# Read both files
-print("Reading res.xlsb...")
-res_df = read_filtered_xlsb('res.xlsb', res_columns)
-print("Reading non res.xlsb...")
-nonres_df = read_filtered_xlsb('non res.xlsb', nonres_columns)
-
-# Combine both
-combined_df = pd.concat([res_df, nonres_df], ignore_index=True)
-
-# Step 1: Missing PANs (blank, NaN, "na")
-missing_pan_df = combined_df[
-    combined_df['pan'].isna() |
-    (combined_df['pan'].astype(str).str.strip().str.lower().isin(['', 'na']))
-].reset_index(drop=True)
-
-# Step 2: Valid PANs
-valid_pan_df = combined_df[
-    ~(combined_df['pan'].isna() |
-      combined_df['pan'].astype(str).str.strip().str.lower().isin(['', 'na']))
-]
-
-# Step 3: Unique PANs (drop duplicates)
-unique_pan_df = valid_pan_df.drop_duplicates(subset='pan').reset_index(drop=True)
-
-# Step 4: Deductee code ends with '02' and ebn == 'N'
-filtered_df = unique_pan_df[
-    unique_pan_df['deductee_code'].astype(str).str.endswith('02') &
-    (unique_pan_df['ebn'].astype(str).str.strip().upper() == 'N')
-]
-
-# ✅ Output preview
-print(f"✅ Total records loaded: {len(combined_df)}")
-print(f"❌ Missing PANs: {len(missing_pan_df)}")
-print(f"✅ Unique PANs: {len(unique_pan_df)}")
-print(f"🎯 Filtered (deductee_code endswith '02' & ebn == 'N'): {len(filtered_df)}")
-
-# Optionally save in chunks
-# unique_pan_df.to_csv("unique_pan.csv", index=False)
-# filtered_df.to_csv("filtered_deductee02_N.csv", index=False)
+        config = config.iloc[0]
+        tbill, spread, tenor, roi = config['TBILL RATE'], config['SPREAD'], config['TENOR'], config['ROI']
