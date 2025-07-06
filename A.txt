@@ -4,10 +4,9 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from datetime import datetime
-import re
 import os
 
-# Extract date for append from ZIP filename
+# Extract append date from zip file name
 zip_file_path = "VFIN_06May2024.zip"
 date_for_append = Path(zip_file_path).stem.split("_")[1]
 
@@ -32,54 +31,52 @@ buyfp_df['Customer Normalized'] = (
     .fillna(buyfp_df['Customer Name'])
 )
 
+# Read customer config workbook
+wb_config = pd.ExcelFile("customer_config.xlsx")
+
+# Add config columns
+buyfp_df['TBill Rate'] = None
+buyfp_df['Spread'] = None
+buyfp_df['Tenor'] = None
+buyfp_df['ROI'] = None
+
+# Fill from correct sheet based on Date Approved
+buyfp_df['Date Approved'] = pd.to_datetime(buyfp_df['Date Approved'], errors='coerce')
+for idx, row in buyfp_df.iterrows():
+    customer = row['Customer Normalized'].strip().lower()
+    date_approved = row['Date Approved']
+    if pd.isna(date_approved):
+        continue
+    sheet_name = date_approved.strftime('%b-%Y')
+    config_df = wb_config.parse(sheet_name)
+    match = config_df[config_df['Customer'].str.lower().str.contains(customer)]
+    if not match.empty:
+        config_row = match.iloc[0]
+        buyfp_df.at[idx, 'TBill Rate'] = config_row['TBILL RATE']
+        buyfp_df.at[idx, 'Spread'] = config_row['SPREAD']
+        buyfp_df.at[idx, 'Tenor'] = config_row['TENOR']
+        buyfp_df.at[idx, 'ROI'] = config_row['ROI']
+
+# Drop rows without complete config
+buyfp_df.dropna(subset=['TBill Rate', 'Spread', 'Tenor', 'ROI'], inplace=True)
+
+# Calculate Rate and Interest Amount
+buyfp_df['Rate'] = buyfp_df['TBill Rate'] + buyfp_df['Spread']
+buyfp_df['Interest Amount'] = round(buyfp_df['Bill amount'] * buyfp_df['Rate'] * buyfp_df['Tenor'] / 36500, 2)
+
+# Output root
 root_output = Path("Customer_Excels")
 root_output.mkdir(exist_ok=True)
 
-# Process each customer
+# Group by customer
 for customer in buyfp_df['Customer Normalized'].dropna().unique():
     cust_buyfp = buyfp_df[buyfp_df['Customer Normalized'].str.lower() == customer.lower()].copy()
-    if 'Customer Normalized' in cust_buyfp.columns:
-        cust_buyfp.drop(columns=['Customer Normalized'], inplace=True)
+    cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains(customer.lower())].copy()
 
-    # Get sheet name from Date Approved column
-    cust_buyfp['Date Approved'] = pd.to_datetime(cust_buyfp['Date Approved'], errors='coerce')
-    valid_approval_dates = cust_buyfp['Date Approved'].dropna()
-
-    if valid_approval_dates.empty:
-        print(f"â ï¸ No valid Date Approved for {customer}")
-        continue
-
-    approval_date = valid_approval_dates.iloc[0]
-    sheet_name = approval_date.strftime('%b-%Y')
-
-    try:
-        config_df = pd.read_excel("customer_config.xlsx", sheet_name=sheet_name)
-    except Exception as e:
-        print(f"â Cannot load sheet {sheet_name} from customer_config.xlsx: {e}")
-        continue
-
-    config = config_df[config_df['Customer'].str.lower().str.contains(customer.lower())]
-    if config.empty:
-        print(f"â ï¸ No config found for {customer} in sheet {sheet_name}")
-        continue
-
-    config = config.iloc[0]
-    tbill, spread, tenor, roi = config['TBILL RATE'], config['SPREAD'], config['TENOR'], config['ROI']
-
-    cust_buyfp['Rate'] = tbill + spread
-    cust_buyfp['Interest Amount'] = round(cust_buyfp['Bill amount'] * cust_buyfp['Rate'] * tenor / 36500, 2)
-
-    if "badshah" in customer.lower():
-        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("badshah")].copy()
-    elif "exotic fruit" in customer.lower():
-        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("exotic fruit")].copy()
-    elif "arcemitthal" in customer.lower():
-        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains("arcemitthal|arcemittal")].copy()
-    else:
-        cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.strip() == customer.lower().strip()].copy()
-
-    cust_vfin['ROI'] = roi
+    # Use most common ROI from buyfp
+    roi = cust_buyfp['ROI'].mode().iloc[0]
     principal_col = 'Amount' if 'Amount' in cust_vfin.columns else 'Principal'
+    cust_vfin['ROI'] = roi
     cust_vfin['Interest Amount'] = round(cust_vfin[principal_col] * roi * 1 / 36500, 2)
 
     all_dates = pd.concat([cust_vfin["Date"], cust_buyfp["Date"]]).dropna()
@@ -119,11 +116,9 @@ for customer in buyfp_df['Customer Normalized'].dropna().unique():
                 buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
                 writer.save()
 
-# Delete original vfin file
+# Cleanup Vfin.xlsx
 try:
     os.remove("Vfin.xlsx")
-    print("â Vfin.xlsx deleted successfully.")
-except FileNotFoundError:
-    print("â ï¸ Vfin.xlsx not found.")
+    print("â Vfin.xlsx deleted.")
 except Exception as e:
-    print(f"â Error deleting Vfin.xlsx: {e}")
+    print(f"â ï¸ {e}")
