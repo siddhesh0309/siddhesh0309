@@ -1,4 +1,13 @@
-    for period in all_dates.dt.to_period('M').unique():
+buyfp_dates = buyfp_df[buyfp_df['Customer Normalized'] == customer]['Date']
+    vfin_dates = vfin_df[vfin_df['Drawee name and address line 1'].str.lower().str.contains(customer.lower())]['Date']
+    all_dates = pd.concat([buyfp_dates, vfin_dates]).dropna(
+
+
+
+
+
+
+for period in all_dates.dt.to_period('M').unique():
         sheet_name = period.strftime('%b-%Y')  # e.g., Dec-2024
         start = period.to_timestamp()
         end = start + pd.offsets.MonthEnd(0)
