@@ -1,98 +1,184 @@
+# Required imports
 import pandas as pd
 from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 import datetime
+import xmltodict
+import zipfile
+import warnings
+import os
+import fnmatch as fmatch
+import re
 
-# --- Load inputs ---
-vfin_df = pd.read_excel("Vfin.xlsx")
-buyfp_df = pd.read_excel("buyfp.xlsx")
-config_path = "Customer Config.xlsx"
+# Disable warnings
+warnings.simplefilter(action='ignore', category=UserWarning)
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
-vfin_df['Date'] = pd.to_datetime(vfin_df['Date'])
-buyfp_df['Date'] = pd.to_datetime(buyfp_df['Date'])
+# Base path
+base_path = ""
 
-output_dir = Path("Customer_Excels")
-output_dir.mkdir(exist_ok=True)
+def create_output_folder(base_path):
+    output_folder = os.path.join(base_path, "output")
+    os.makedirs(output_folder, exist_ok=True)
+    return output_folder
 
-# Helper: get config for a customer from correct sheet
-def get_customer_config(customer, date):
-    month_sheet = date.strftime("%b-%Y")  # Ex: Dec-2024
-    try:
-        sheet_df = pd.read_excel(config_path, sheet_name=month_sheet)
-        row = sheet_df[sheet_df['Customer'].str.lower() == customer.lower()]
-        if not row.empty:
-            return row.iloc[0].to_dict()
-    except Exception:
-        pass
-    return None
+output_folder = create_output_folder(base_path)
 
-# For each customer
-for customer in buyfp_df['Customer Name'].dropna().unique():
-    cust_vfin = vfin_df[vfin_df['Customer Name'] == customer].copy()
-    cust_buyfp = buyfp_df[buyfp_df['Customer Name'] == customer].copy()
+def find_file(filename_pattern, basedir=base_path):
+    latest_file = None
+    latest_time = 0
+    for user_folder in os.listdir(basedir):
+        user_path = os.path.join(basedir, user_folder, 'Input')
+        if os.path.isdir(user_path):
+            for dirpath, _, filenames in os.walk(user_path):
+                for fn in fmatch.filter(filenames, filename_pattern):
+                    path = os.path.join(dirpath, fn)
+                    mtime = os.path.getmtime(path)
+                    if mtime > latest_time:
+                        latest_time = mtime
+                        latest_file = path
+    return latest_file
 
-    # Inject config values
-    for idx, row in cust_buyfp.iterrows():
-        config = get_customer_config(customer, row['Date'])
-        if config:
-            cust_buyfp.at[idx, 'TBill Rate'] = config.get('TBill Rate')
-            cust_buyfp.at[idx, 'Spread'] = config.get('Spread')
-            cust_buyfp.at[idx, 'Tenor'] = config.get('Tenor')
+def extract_and_convert_vfin(zip_path):
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        xml_name = z.namelist()[0]
+        z.extract(xml_name, path=output_folder)
+    data = xmltodict.parse(open(os.path.join(output_folder, xml_name), 'rb'))
+    rows = data['Workbook']['Worksheet']['Table']['Row']
+    df = pd.DataFrame([[c.get('Data', {}).get('#text', '') for c in row.get('Cell', [])] for row in rows])
+    df.columns = df.iloc[0]
+    df = df.drop(0).reset_index(drop=True)
+    for col in ['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance', 'COF/VOF RATE', 'DR Interest Rate Spread']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    df[['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance']] = df[
+        ['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance']
+    ].fillna(0).round(0).astype('Int64')
+    return df
 
-    for idx, row in cust_vfin.iterrows():
-        config = get_customer_config(customer, row['Date'])
-        if config:
-            roi = config.get('ROI')
-            tenor = config.get('Tenor')
-            amount = row.get('Amount')
-            # Add ROI and Interest
-            cust_vfin.at[idx, 'ROI'] = roi
-            if pd.notnull(amount) and pd.notnull(roi) and pd.notnull(tenor):
-                interest = round((amount * roi * tenor) / 36500, 2)
-                cust_vfin.at[idx, 'Interest Amount'] = interest
+# Customer normalization mapping
+customer_group_map = {
+    "arcelormittal nippon stl ipl": "arcelormittal",
+    "badshah": "badshah",
+    "morde foods": "morde foods",
+    "tata electronics private": "tata electronics private",
+    "technocraft industries (india) ltd": "technocraft"
+}
 
-    # Create / overwrite Master
-    with pd.ExcelWriter(output_dir / f"{customer}_Master.xlsx", engine="openpyxl", mode='w') as writer:
-        cust_vfin.to_excel(writer, index=False, sheet_name="vfin")
-        cust_buyfp.to_excel(writer, index=False, sheet_name="buyfp")
+# Start script
+print("\n-- Generating Customer Files --")
 
-    # --- Month-wise Processing ---
-    all_dates = pd.concat([cust_vfin['Date'], cust_buyfp['Date']]).dropna().dt.to_period("M").unique()
-    for period in all_dates:
-        month_start = period.to_timestamp()
-        month_end = month_start + pd.offsets.MonthEnd(0)
+# Read VFIN, BUYFp, and normalize customer names
+vfin_df = extract_and_convert_vfin(find_file("VFIN*"))
+buyfp_df = pd.read_excel(find_file("IP@BUYFp*"))
+buyfp_df['BUSYDT'] = pd.to_datetime(buyfp_df['BUSYDT'], errors='coerce')
+vfin_df['Date approved'] = pd.to_datetime(vfin_df['Date approved'], errors='coerce')
+buyfp_df['Customer Normalized'] = buyfp_df['BUCUNM'].str.strip().str.lower().map(customer_group_map).fillna(
+    buyfp_df['BUCUNM'].str.strip().str.lower())
 
-        vfin_month = cust_vfin[(cust_vfin['Date'] >= month_start) & (cust_vfin['Date'] <= month_end)]
-        buyfp_month = cust_buyfp[(cust_buyfp['Date'] >= month_start) & (cust_buyfp['Date'] <= month_end)]
+VFDate = find_file("VFIN*")
+folder_name = Path(VFDate).stem
+date_match = re.search(r'VFIN_(\d{2}[A-Za-z]{3}\d{4})', folder_name)
+if date_match:
+    date_for_append = date_match.group(1)
+else:
+    raise ValueError("Cannot extract date from folder name")
 
-        file_path = output_dir / f"{customer}_{period}.xlsx"
+root_output = Path(output_folder) / "Customer_Excels"
+root_output.mkdir(exist_ok=True)
 
-        if not file_path.exists():
-            # Create fresh file
-            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
-                vfin_month.to_excel(writer, sheet_name="vfin", index=False)
-                buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
-        else:
-            wb = load_workbook(file_path)
-            writer = pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay')
-            writer.book = wb
+# Process each customer
+for customer in buyfp_df['Customer Normalized'].dropna().unique():
+    cust_buyfp = buyfp_df[buyfp_df['Customer Normalized'] == customer].copy()
+    cust_vfin = vfin_df[
+        vfin_df['Drawee name and address line 1'].str.lower().str.contains(customer)
+    ].copy() if customer in customer_group_map.values() else vfin_df[
+        vfin_df['Drawee name and address line 1'].str.strip().str.lower() == customer
+    ].copy()
 
-            # Append vfin
-            if 'vfin' in wb.sheetnames:
-                sheet = wb['vfin']
-                sheet.append([])  # blank row
-                for r in dataframe_to_rows(vfin_month, index=False, header=False):
-                    sheet.append(r)
-            else:
-                vfin_month.to_excel(writer, sheet_name="vfin", index=False)
+    # BUYFp Enrichment by row
+    enriched_buyfp_rows = []
+    for _, row in cust_buyfp.iterrows():
+        if pd.isna(row['BUSYDT']):
+            continue
+        sheet_name = row['BUSYDT'].strftime('%b-%Y')
+        config_monthly = pd.read_excel(find_file("customer_config*"), sheet_name=sheet_name)
+        config_monthly['Customer Normalized'] = config_monthly['Customer Name'].str.strip().str.lower().map(customer_group_map).fillna(config_monthly['Customer Name'].str.strip().str.lower())
+        cfg = config_monthly[config_monthly['Customer Normalized'] == customer]
+        if cfg.empty:
+            print(f"Skipping BUYFP row for {customer} on {row['BUSYDT'].date()} — no config in {sheet_name}")
+            continue
+        tbill, spread, tenor = cfg.iloc[0][['Tbill Rate', 'Spread', 'Tenor']]
+        rate = tbill + spread
+        interest = round(row['BUCOAMT'] * rate * tenor / 36500, 2)
+        row['TBill Rate'] = tbill
+        row['Spread'] = spread
+        row['Tenor'] = tenor
+        row['Rate'] = rate
+        row['Interest Amount'] = interest
+        enriched_buyfp_rows.append(row)
 
-            # Overwrite buyfp
-            if 'buyfp' in wb.sheetnames:
-                wb.remove(wb['buyfp'])
-            buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
+    cust_buyfp = pd.DataFrame(enriched_buyfp_rows)
 
-            writer.save()
-            writer.close()
+    # VFIN Enrichment by row
+    enriched_vfin_rows = []
+    for _, row in cust_vfin.iterrows():
+        if pd.isna(row['Date approved']):
+            continue
+        sheet_name = row['Date approved'].strftime('%b-%Y')
+        config_monthly = pd.read_excel(find_file("customer_config*"), sheet_name=sheet_name)
+        config_monthly['Customer Normalized'] = config_monthly['Customer Name'].str.strip().str.lower().map(customer_group_map).fillna(config_monthly['Customer Name'].str.strip().str.lower())
+        cfg = config_monthly[config_monthly['Customer Normalized'] == customer]
+        if cfg.empty:
+            print(f"Skipping VFIN row for {customer} on {row['Date approved'].date()} — no config in {sheet_name}")
+            continue
+        roi = cfg.iloc[0]['Roi']
+        principal = row.get('Bill amount', 0)
+        interest = round(principal * roi / 36500, 2)
+        row['RoI'] = roi
+        row['Interest Amount'] = interest
+        enriched_vfin_rows.append(row)
 
-print("✅ Process complete.")
+    cust_vfin = pd.DataFrame(enriched_vfin_rows)
+
+    # Write to master file
+    customer_dir = root_output / customer
+    customer_dir.mkdir(exist_ok=True)
+    master_path = customer_dir / f"{customer}_Master.xlsx"
+    with pd.ExcelWriter(master_path, engine='openpyxl', mode='w') as writer:
+        cust_vfin.to_excel(writer, sheet_name='vfin', index=False)
+        cust_buyfp.to_excel(writer, sheet_name='buyfp', index=False)
+    wb = load_workbook(master_path)
+    ws_v = wb["vfin"]
+    ws_b = wb["buyfp"]
+    ws_v.insert_rows(1)
+    ws_v.cell(row=1, column=1, value=date_for_append)
+    wb.save(master_path)
+
+    # Monthly file handling
+    all_dates = pd.concat([cust_vfin['Date approved'], cust_buyfp['BUSYDT']]).dropna()
+    for period in all_dates.dt.to_period("M").unique():
+        s = period.to_timestamp()
+        e = s + pd.offsets.MonthEnd(0)
+        vmon = cust_vfin[(cust_vfin['Date approved'] >= s) & (cust_vfin['Date approved'] <= e)]
+        bmon = cust_buyfp[(cust_buyfp['BUSYDT'] >= s) & (cust_buyfp['BUSYDT'] <= e)]
+        ystr = s.strftime('%Y')
+        mstr = s.strftime('%b')
+        mdir = customer_dir / ystr / mstr
+        mdir.mkdir(parents=True, exist_ok=True)
+        fp = mdir / f"{customer}_{mstr}.xlsx"
+        with pd.ExcelWriter(fp, engine="openpyxl", mode='w') as writer:
+            vmon.to_excel(writer, sheet_name="vfin", index=False)
+            bmon.to_excel(writer, sheet_name="buyfp", index=False)
+        wb2 = load_workbook(fp)
+        ws2 = wb2["vfin"]
+        ws2.insert_rows(1)
+        ws2.cell(row=1, column=1, value=date_for_append)
+        wb2.save(fp)
+
+# Clean XML
+xmlfile = Path(output_folder) / 'VFIN.xml'
+if xmlfile.exists():
+    xmlfile.unlink()
+print("\n✅ Generated Customer Files Successfully.")
