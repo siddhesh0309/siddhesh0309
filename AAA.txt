@@ -1,75 +1,9 @@
-# Required imports
-import pandas as pd
-from pathlib import Path
-from openpyxl import load_workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-import datetime
-import xmltodict
-import zipfile
-import warnings
-import os
-import fnmatch as fmatch
-import re
-
-# Disable warnings
-warnings.simplefilter(action='ignore', category=UserWarning)
-warnings.simplefilter(action='ignore', category=FutureWarning)
-
-# Base path
-base_path = ""
-
-def create_output_folder(base_path):
-    output_folder = os.path.join(base_path, "output")
-    os.makedirs(output_folder, exist_ok=True)
-    return output_folder
-
-output_folder = create_output_folder(base_path)
-
-def find_file(filename_pattern, basedir=base_path):
-    latest_file = None
-    latest_time = 0
-    for user_folder in os.listdir(basedir):
-        user_path = os.path.join(basedir, user_folder, 'Input')
-        if os.path.isdir(user_path):
-            for dirpath, _, filenames in os.walk(user_path):
-                for fn in fmatch.filter(filenames, filename_pattern):
-                    path = os.path.join(dirpath, fn)
-                    mtime = os.path.getmtime(path)
-                    if mtime > latest_time:
-                        latest_time = mtime
-                        latest_file = path
-    return latest_file
-
-def extract_and_convert_vfin(zip_path):
-    with zipfile.ZipFile(zip_path, 'r') as z:
-        xml_name = z.namelist()[0]
-        z.extract(xml_name, path=output_folder)
-    data = xmltodict.parse(open(os.path.join(output_folder, xml_name), 'rb'))
-    rows = data['Workbook']['Worksheet']['Table']['Row']
-    df = pd.DataFrame([[c.get('Data', {}).get('#text', '') for c in row.get('Cell', [])] for row in rows])
-    df.columns = df.iloc[0]
-    df = df.drop(0).reset_index(drop=True)
-    for col in ['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance', 'COF/VOF RATE', 'DR Interest Rate Spread']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    df[['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance']] = df[
-        ['Bill amount', 'Bill amount outstanding', 'Lcy Ledger Balance']
-    ].fillna(0).round(0).astype('Int64')
-    return df
-
-# Customer normalization mapping
-customer_group_map = {
-    "arcelormittal nippon stl ipl": "arcelormittal",
-    "badshah": "badshah",
-    "morde foods": "morde foods",
-    "tata electronics private": "tata electronics private",
-    "technocraft industries (india) ltd": "technocraft"
-}
+# (IMPORTS SAME AS BEFORE)
+# ... all your imports and function definitions (create_output_folder, find_file, extract_and_convert_vfin) ...
 
 # Start script
 print("\n-- Generating Customer Files --")
 
-# Read VFIN, BUYFp, and normalize customer names
 vfin_df = extract_and_convert_vfin(find_file("VFIN*"))
 buyfp_df = pd.read_excel(find_file("IP@BUYFp*"))
 buyfp_df['BUSYDT'] = pd.to_datetime(buyfp_df['BUSYDT'], errors='coerce')
@@ -88,16 +22,10 @@ else:
 root_output = Path(output_folder) / "Customer_Excels"
 root_output.mkdir(exist_ok=True)
 
-# Process each customer
 for customer in buyfp_df['Customer Normalized'].dropna().unique():
     cust_buyfp = buyfp_df[buyfp_df['Customer Normalized'] == customer].copy()
-    cust_vfin = vfin_df[
-        vfin_df['Drawee name and address line 1'].str.lower().str.contains(customer)
-    ].copy() if customer in customer_group_map.values() else vfin_df[
-        vfin_df['Drawee name and address line 1'].str.strip().str.lower() == customer
-    ].copy()
+    cust_vfin = vfin_df[vfin_df['Drawee name and address line 1'].str.lower().str.contains(customer)].copy()
 
-    # BUYFp Enrichment by row
     enriched_buyfp_rows = []
     for _, row in cust_buyfp.iterrows():
         if pd.isna(row['BUSYDT']):
@@ -121,7 +49,6 @@ for customer in buyfp_df['Customer Normalized'].dropna().unique():
 
     cust_buyfp = pd.DataFrame(enriched_buyfp_rows)
 
-    # VFIN Enrichment by row
     enriched_vfin_rows = []
     for _, row in cust_vfin.iterrows():
         if pd.isna(row['Date approved']):
@@ -142,21 +69,41 @@ for customer in buyfp_df['Customer Normalized'].dropna().unique():
 
     cust_vfin = pd.DataFrame(enriched_vfin_rows)
 
-    # Write to master file
     customer_dir = root_output / customer
     customer_dir.mkdir(exist_ok=True)
     master_path = customer_dir / f"{customer}_Master.xlsx"
-    with pd.ExcelWriter(master_path, engine='openpyxl', mode='w') as writer:
-        cust_vfin.to_excel(writer, sheet_name='vfin', index=False)
-        cust_buyfp.to_excel(writer, sheet_name='buyfp', index=False)
-    wb = load_workbook(master_path)
-    ws_v = wb["vfin"]
-    ws_b = wb["buyfp"]
-    ws_v.insert_rows(1)
-    ws_v.cell(row=1, column=1, value=date_for_append)
-    wb.save(master_path)
 
-    # Monthly file handling
+    if not master_path.exists():
+        with pd.ExcelWriter(master_path, engine='openpyxl') as writer:
+            cust_vfin.to_excel(writer, sheet_name='vfin', index=False)
+            cust_buyfp.to_excel(writer, sheet_name='buyfp', index=False)
+        wb = load_workbook(master_path)
+        ws_v = wb["vfin"]
+        ws_v.insert_rows(1)
+        ws_v.cell(row=1, column=1, value=date_for_append)
+        wb.save(master_path)
+    else:
+        wb = load_workbook(master_path)
+
+        # Append to vfin
+        if 'vfin' in wb.sheetnames:
+            ws_v = wb['vfin']
+            ws_v.append([date_for_append])
+            for row in dataframe_to_rows(cust_vfin, index=False, header=False):
+                ws_v.append(row)
+        else:
+            with pd.ExcelWriter(master_path, engine="openpyxl", mode='a', if_sheet_exists='overlay') as writer:
+                cust_vfin.to_excel(writer, sheet_name='vfin', index=False)
+
+        # Overwrite buyfp
+        if 'buyfp' in wb.sheetnames:
+            wb.remove(wb['buyfp'])
+        wb.save(master_path)
+
+        with pd.ExcelWriter(master_path, engine="openpyxl", mode='a', if_sheet_exists='overlay') as writer:
+            cust_buyfp.to_excel(writer, sheet_name="buyfp", index=False)
+
+    # --- Monthly file handling ---
     all_dates = pd.concat([cust_vfin['Date approved'], cust_buyfp['BUSYDT']]).dropna()
     for period in all_dates.dt.to_period("M").unique():
         s = period.to_timestamp()
@@ -168,17 +115,40 @@ for customer in buyfp_df['Customer Normalized'].dropna().unique():
         mdir = customer_dir / ystr / mstr
         mdir.mkdir(parents=True, exist_ok=True)
         fp = mdir / f"{customer}_{mstr}.xlsx"
-        with pd.ExcelWriter(fp, engine="openpyxl", mode='w') as writer:
-            vmon.to_excel(writer, sheet_name="vfin", index=False)
-            bmon.to_excel(writer, sheet_name="buyfp", index=False)
-        wb2 = load_workbook(fp)
-        ws2 = wb2["vfin"]
-        ws2.insert_rows(1)
-        ws2.cell(row=1, column=1, value=date_for_append)
-        wb2.save(fp)
 
-# Clean XML
+        if not fp.exists():
+            with pd.ExcelWriter(fp, engine="openpyxl") as writer:
+                vmon.to_excel(writer, sheet_name="vfin", index=False)
+                bmon.to_excel(writer, sheet_name="buyfp", index=False)
+            wb2 = load_workbook(fp)
+            ws2 = wb2["vfin"]
+            ws2.insert_rows(1)
+            ws2.cell(row=1, column=1, value=date_for_append)
+            wb2.save(fp)
+        else:
+            wb2 = load_workbook(fp)
+
+            # Append to vfin
+            if 'vfin' in wb2.sheetnames:
+                ws_v = wb2['vfin']
+                ws_v.append([date_for_append])
+                for row in dataframe_to_rows(vmon, index=False, header=False):
+                    ws_v.append(row)
+            else:
+                with pd.ExcelWriter(fp, engine="openpyxl", mode='a', if_sheet_exists='overlay') as writer:
+                    vmon.to_excel(writer, sheet_name="vfin", index=False)
+
+            # Overwrite buyfp
+            if 'buyfp' in wb2.sheetnames:
+                wb2.remove(wb2['buyfp'])
+            wb2.save(fp)
+
+            with pd.ExcelWriter(fp, engine="openpyxl", mode='a', if_sheet_exists='overlay') as writer:
+                bmon.to_excel(writer, sheet_name="buyfp", index=False)
+
+# Cleanup
 xmlfile = Path(output_folder) / 'VFIN.xml'
 if xmlfile.exists():
     xmlfile.unlink()
+
 print("\n✅ Generated Customer Files Successfully.")
