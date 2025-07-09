@@ -1,47 +1,11 @@
-import pandas as pd
-import re
+# ✅ Step 6: Check C – Base Key ID (before -1) → multiple addresses
+df['KeyID_Base'] = df['Key ID'].astype(str).str.split('-').str[0]
+basekey_to_addresses = df.groupby('KeyID_Base')['Normalized Address'].nunique().reset_index()
+conflicting_basekeys = basekey_to_addresses[basekey_to_addresses['Normalized Address'] > 1]['KeyID_Base']
+df['Conflict_Type_C'] = df['KeyID_Base'].isin(conflicting_basekeys)
 
-# Step 1: Load Excel
-df = pd.read_excel("your_file.xlsx")  # Replace with actual file path
-
-# Step 2: Merge 12 address columns into one
-address_columns = df.columns[:12]  # Adjust if address columns are named differently
-df['Full Address'] = df[address_columns].fillna('').astype(str).agg(' '.join, axis=1)
-
-# Step 3: Normalize address
-def normalize_address_ultimate(address):
-    if pd.isnull(address):
-        return ""
-    address = address.lower()
-    address = re.sub(r'[^\w]', ' ', address)
-    parts = re.findall(r'\w+', address)
-    parts.sort()
-    return ''.join(parts)
-
-df['Normalized Address'] = df['Full Address'].apply(normalize_address_ultimate)
-
-# === CHECK A: Same address used by multiple Key IDs ===
-address_to_keyids = df.groupby('Normalized Address')['Key ID'].nunique().reset_index()
-conflicting_addresses = address_to_keyids[address_to_keyids['Key ID'] > 1]['Normalized Address']
-df['Conflict_Type_A'] = df['Normalized Address'].isin(conflicting_addresses)
-
-# === CHECK B: Same Key ID linked to multiple addresses ===
-keyid_to_addresses = df.groupby('Key ID')['Normalized Address'].nunique().reset_index()
-conflicting_keyids = keyid_to_addresses[keyid_to_addresses['Normalized Address'] > 1]['Key ID']
-df['Conflict_Type_B'] = df['Key ID'].isin(conflicting_keyids)
-
-# === Final Filter: Rows with ANY Conflict ===
+# Step 7: Mark conflict reasons
 df['Status'] = ''
 df.loc[df['Conflict_Type_A'], 'Status'] += '❌ Address used by multiple Key IDs. '
-df.loc[df['Conflict_Type_B'], 'Status'] += '❌ Key ID has multiple addresses.'
-
-# Filter rows with any conflict
-conflict_rows = df[df['Status'] != '']
-
-# Drop helper columns before saving
-conflict_rows = conflict_rows.drop(columns=['Conflict_Type_A', 'Conflict_Type_B'])
-
-# Save output
-conflict_rows.to_excel("conflicting_address_keyid_analysis.xlsx", index=False)
-
-print("✅ Full conflict report saved to 'conflicting_address_keyid_analysis.xlsx'")
+df.loc[df['Conflict_Type_B'], 'Status'] += '❌ Key ID has multiple addresses. '
+df.loc[df['Conflict_Type_C'], 'Status'] += '❌ Same base Key ID has multiple addresses. '
