@@ -1,124 +1,47 @@
-
 import pandas as pd
-from pathlib import Path
-from openpyxl import load_workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from datetime import datetime
-import os
+import re
 
-# Extract append date from zip file name
-zip_file_path = "VFIN_06May2024.zip"
-date_for_append = Path(zip_file_path).stem.split("_")[1]
+# Step 1: Load Excel
+df = pd.read_excel("your_file.xlsx")  # Replace with actual file path
 
-# Load Excel files
-vfin_df = pd.read_excel("Vfin.xlsx")
-buyfp_df = pd.read_excel("buyfp.xlsx")
+# Step 2: Merge 12 address columns into one
+address_columns = df.columns[:12]  # Adjust if address columns are named differently
+df['Full Address'] = df[address_columns].fillna('').astype(str).agg(' '.join, axis=1)
 
-vfin_df['Date'] = pd.to_datetime(vfin_df['Date'], errors='coerce')
-buyfp_df['Date'] = pd.to_datetime(buyfp_df['Date'], errors='coerce')
+# Step 3: Normalize address
+def normalize_address_ultimate(address):
+    if pd.isnull(address):
+        return ""
+    address = address.lower()
+    address = re.sub(r'[^\w]', ' ', address)
+    parts = re.findall(r'\w+', address)
+    parts.sort()
+    return ''.join(parts)
 
-# Normalize customer names
-customer_group_map = {
-    "arcemitthal il": "Arcemitthal",
-    "arcemitthal lp": "Arcemitthal",
-    "arcemitthal": "Arcemitthal",
-    "badshah": "Badshah",
-    "exotic fruit": "Exotic Fruit"
-}
-buyfp_df['Customer Normalized'] = (
-    buyfp_df['Customer Name'].str.strip().str.lower()
-    .map(customer_group_map)
-    .fillna(buyfp_df['Customer Name'])
-)
+df['Normalized Address'] = df['Full Address'].apply(normalize_address_ultimate)
 
-# Read customer config workbook
-wb_config = pd.ExcelFile("customer_config.xlsx")
+# === CHECK A: Same address used by multiple Key IDs ===
+address_to_keyids = df.groupby('Normalized Address')['Key ID'].nunique().reset_index()
+conflicting_addresses = address_to_keyids[address_to_keyids['Key ID'] > 1]['Normalized Address']
+df['Conflict_Type_A'] = df['Normalized Address'].isin(conflicting_addresses)
 
-# Add config columns
-buyfp_df['TBill Rate'] = None
-buyfp_df['Spread'] = None
-buyfp_df['Tenor'] = None
-buyfp_df['ROI'] = None
+# === CHECK B: Same Key ID linked to multiple addresses ===
+keyid_to_addresses = df.groupby('Key ID')['Normalized Address'].nunique().reset_index()
+conflicting_keyids = keyid_to_addresses[keyid_to_addresses['Normalized Address'] > 1]['Key ID']
+df['Conflict_Type_B'] = df['Key ID'].isin(conflicting_keyids)
 
-# Fill from correct sheet based on Date Approved
-buyfp_df['Date Approved'] = pd.to_datetime(buyfp_df['Date Approved'], errors='coerce')
-for idx, row in buyfp_df.iterrows():
-    customer = row['Customer Normalized'].strip().lower()
-    date_approved = row['Date Approved']
-    if pd.isna(date_approved):
-        continue
-    sheet_name = date_approved.strftime('%b-%Y')
-    config_df = wb_config.parse(sheet_name)
-    match = config_df[config_df['Customer'].str.lower().str.contains(customer)]
-    if not match.empty:
-        config_row = match.iloc[0]
-        buyfp_df.at[idx, 'TBill Rate'] = config_row['TBILL RATE']
-        buyfp_df.at[idx, 'Spread'] = config_row['SPREAD']
-        buyfp_df.at[idx, 'Tenor'] = config_row['TENOR']
-        buyfp_df.at[idx, 'ROI'] = config_row['ROI']
+# === Final Filter: Rows with ANY Conflict ===
+df['Status'] = ''
+df.loc[df['Conflict_Type_A'], 'Status'] += '❌ Address used by multiple Key IDs. '
+df.loc[df['Conflict_Type_B'], 'Status'] += '❌ Key ID has multiple addresses.'
 
-# Drop rows without complete config
-buyfp_df.dropna(subset=['TBill Rate', 'Spread', 'Tenor', 'ROI'], inplace=True)
+# Filter rows with any conflict
+conflict_rows = df[df['Status'] != '']
 
-# Calculate Rate and Interest Amount
-buyfp_df['Rate'] = buyfp_df['TBill Rate'] + buyfp_df['Spread']
-buyfp_df['Interest Amount'] = round(buyfp_df['Bill amount'] * buyfp_df['Rate'] * buyfp_df['Tenor'] / 36500, 2)
+# Drop helper columns before saving
+conflict_rows = conflict_rows.drop(columns=['Conflict_Type_A', 'Conflict_Type_B'])
 
-# Output root
-root_output = Path("Customer_Excels")
-root_output.mkdir(exist_ok=True)
+# Save output
+conflict_rows.to_excel("conflicting_address_keyid_analysis.xlsx", index=False)
 
-# Group by customer
-for customer in buyfp_df['Customer Normalized'].dropna().unique():
-    cust_buyfp = buyfp_df[buyfp_df['Customer Normalized'].str.lower() == customer.lower()].copy()
-    cust_vfin = vfin_df[vfin_df['Customer Name'].str.lower().str.contains(customer.lower())].copy()
-
-    # Use most common ROI from buyfp
-    roi = cust_buyfp['ROI'].mode().iloc[0]
-    principal_col = 'Amount' if 'Amount' in cust_vfin.columns else 'Principal'
-    cust_vfin['ROI'] = roi
-    cust_vfin['Interest Amount'] = round(cust_vfin[principal_col] * roi * 1 / 36500, 2)
-
-    all_dates = pd.concat([cust_vfin["Date"], cust_buyfp["Date"]]).dropna()
-    for period in all_dates.dt.to_period("M").unique():
-        start = period.to_timestamp()
-        end = start + pd.offsets.MonthEnd(0)
-
-        vfin_month = cust_vfin[(cust_vfin["Date"] >= start) & (cust_vfin["Date"] <= end)]
-        buyfp_month = cust_buyfp[(cust_buyfp["Date"] >= start) & (cust_buyfp["Date"] <= end)]
-
-        year_str = start.strftime('%Y')
-        month_str = start.strftime('%b')
-        customer_dir = root_output / customer / year_str / month_str
-        customer_dir.mkdir(parents=True, exist_ok=True)
-        file_path = customer_dir / f"{customer}_{month_str}.xlsx"
-
-        if not file_path.exists():
-            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
-                vfin_month.to_excel(writer, sheet_name="vfin", index=False)
-                buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
-            wb = load_workbook(file_path)
-            ws = wb["vfin"]
-            ws.insert_rows(1)
-            ws.cell(row=1, column=1, value=date_for_append)
-            wb.save(file_path)
-        else:
-            wb = load_workbook(file_path)
-            if "vfin" in wb.sheetnames:
-                sheet = wb["vfin"]
-                sheet.append([date_for_append])
-                for row in dataframe_to_rows(vfin_month, index=False, header=False):
-                    sheet.append(row)
-            if "buyfp" in wb.sheetnames:
-                wb.remove(wb["buyfp"])
-            with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                writer.book = wb
-                buyfp_month.to_excel(writer, sheet_name="buyfp", index=False)
-                writer.save()
-
-# Cleanup Vfin.xlsx
-try:
-    os.remove("Vfin.xlsx")
-    print("â Vfin.xlsx deleted.")
-except Exception as e:
-    print(f"â ï¸ {e}")
+print("✅ Full conflict report saved to 'conflicting_address_keyid_analysis.xlsx'")
