@@ -1,11 +1,64 @@
-# ✅ Step 6: Check C – Base Key ID (before -1) → multiple addresses
-df['KeyID_Base'] = df['Key ID'].astype(str).str.split('-').str[0]
-basekey_to_addresses = df.groupby('KeyID_Base')['Normalized Address'].nunique().reset_index()
-conflicting_basekeys = basekey_to_addresses[basekey_to_addresses['Normalized Address'] > 1]['KeyID_Base']
-df['Conflict_Type_C'] = df['KeyID_Base'].isin(conflicting_basekeys)
+import pandas as pd
+import re
 
-# Step 7: Mark conflict reasons
-df['Status'] = ''
-df.loc[df['Conflict_Type_A'], 'Status'] += '❌ Address used by multiple Key IDs. '
-df.loc[df['Conflict_Type_B'], 'Status'] += '❌ Key ID has multiple addresses. '
-df.loc[df['Conflict_Type_C'], 'Status'] += '❌ Same base Key ID has multiple addresses. '
+# Load Excel
+df = pd.read_excel("your_file.xlsx")  # Replace with actual file path
+
+# Merge 12 address columns into one
+address_columns = df.columns[:12]  # Adjust this if needed
+df['Full Address'] = df[address_columns].fillna('').astype(str).agg(' '.join, axis=1)
+
+# Normalize Address
+def normalize_address_ultimate(address):
+    if pd.isnull(address):
+        return ""
+    address = address.lower()
+    address = re.sub(r'[^\w]', ' ', address)
+    parts = re.findall(r'\w+', address)
+    parts.sort()
+    return ''.join(parts)
+
+df['Normalized Address'] = df['Full Address'].apply(normalize_address_ultimate)
+
+# Create KeyID + Address combination
+df['KeyID_Address_Combo'] = df['Key ID'].astype(str) + '|' + df['Normalized Address']
+
+# ❌ REMOVE rows where Key ID and Normalized Address are same (even if repeated)
+combo_counts = df['KeyID_Address_Combo'].value_counts()
+df_filtered = df[combo_counts[df['KeyID_Address_Combo']].values == 1].copy()
+
+# Conflict Check A – Same address used by multiple Key IDs
+address_to_keyids = df_filtered.groupby('Normalized Address')['Key ID'].nunique().reset_index()
+conflicting_addresses = address_to_keyids[address_to_keyids['Key ID'] > 1]['Normalized Address']
+df_filtered['Conflict_Type_A'] = df_filtered['Normalized Address'].isin(conflicting_addresses)
+
+# Conflict Check B – Same Key ID linked to multiple addresses
+keyid_to_addresses = df_filtered.groupby('Key ID')['Normalized Address'].nunique().reset_index()
+conflicting_keyids = keyid_to_addresses[keyid_to_addresses['Normalized Address'] > 1]['Key ID']
+df_filtered['Conflict_Type_B'] = df_filtered['Key ID'].isin(conflicting_keyids)
+
+# Conflict Check C – Same base Key ID has multiple addresses
+df_filtered['KeyID_Base'] = df_filtered['Key ID'].astype(str).str.split('-').str[0]
+basekey_to_addresses = df_filtered.groupby('KeyID_Base')['Normalized Address'].nunique().reset_index()
+conflicting_basekeys = basekey_to_addresses[basekey_to_addresses['Normalized Address'] > 1]['KeyID_Base']
+df_filtered['Conflict_Type_C'] = df_filtered['KeyID_Base'].isin(conflicting_basekeys)
+
+# Assign Conflict Status
+df_filtered['Status'] = ''
+df_filtered.loc[df_filtered['Conflict_Type_A'], 'Status'] += '❌ Address used by multiple Key IDs. '
+df_filtered.loc[df_filtered['Conflict_Type_B'], 'Status'] += '❌ Key ID has multiple addresses. '
+df_filtered.loc[df_filtered['Conflict_Type_C'], 'Status'] += '❌ Same base Key ID has multiple addresses. '
+
+# Filter only rows with conflict
+conflict_rows = df_filtered[df_filtered['Status'] != '']
+
+# Drop helper columns
+conflict_rows = conflict_rows.drop(columns=[
+    'Conflict_Type_A', 'Conflict_Type_B', 'Conflict_Type_C',
+    'KeyID_Base', 'KeyID_Address_Combo'
+])
+
+# Save result
+conflict_rows.to_excel("conflicting_address_keyid_analysis.xlsx", index=False)
+
+print("✅ Final report saved (same Key ID + address rows are removed)")
