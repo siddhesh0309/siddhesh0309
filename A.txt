@@ -1,64 +1,57 @@
-import pandas as pd
-import re
+# === PROCESS DEDUCTEE CODE 01 WITH TDQ EMAILS ===
+print("📂 Processing Deductee Code 01 PANs using tdq.xlsx...")
 
-# Load Excel
-df = pd.read_excel("your_file.xlsx")  # Replace with actual file path
+tdq_file = 'tdq.xlsx'
+tdq_df = pd.read_excel(tdq_file)
 
-# Merge 12 address columns into one
-address_columns = df.columns[:12]  # Adjust this if needed
-df['Full Address'] = df[address_columns].fillna('').astype(str).agg(' '.join, axis=1)
+# Normalize PANs and email columns
+tdq_df['pan'] = tdq_df['pan'].astype(str).str.strip().str.upper()
 
-# Normalize Address
-def normalize_address_ultimate(address):
-    if pd.isnull(address):
-        return ""
-    address = address.lower()
-    address = re.sub(r'[^\w]', ' ', address)
-    parts = re.findall(r'\w+', address)
-    parts.sort()
-    return ''.join(parts)
+# Extract email columns
+email_cols = [col for col in tdq_df.columns if str(col).lower().startswith('email address')]
 
-df['Normalized Address'] = df['Full Address'].apply(normalize_address_ultimate)
+# Get PANs with deductee code 01 from unique_pan_df
+deductee01_df = unique_pan_df[
+    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith('01')
+]
 
-# Create KeyID + Address combination
-df['KeyID_Address_Combo'] = df['Key ID'].astype(str) + '|' + df['Normalized Address']
+# Join on PAN
+deductee01_with_email = pd.merge(
+    deductee01_df[['pan']],
+    tdq_df[['pan'] + email_cols],
+    how='left',
+    on='pan'
+)
 
-# ❌ REMOVE rows where Key ID and Normalized Address are same (even if repeated)
-combo_counts = df['KeyID_Address_Combo'].value_counts()
-df_filtered = df[combo_counts[df['KeyID_Address_Combo']].values == 1].copy()
+# Split into corp email/physical based on whether any email is present
+def has_any_email(row):
+    return any(str(row[col]).strip().lower() not in ['', 'nan', 'na'] for col in email_cols)
 
-# Conflict Check A – Same address used by multiple Key IDs
-address_to_keyids = df_filtered.groupby('Normalized Address')['Key ID'].nunique().reset_index()
-conflicting_addresses = address_to_keyids[address_to_keyids['Key ID'] > 1]['Normalized Address']
-df_filtered['Conflict_Type_A'] = df_filtered['Normalized Address'].isin(conflicting_addresses)
+deductee01_with_email['has_email'] = deductee01_with_email.apply(has_any_email, axis=1)
 
-# Conflict Check B – Same Key ID linked to multiple addresses
-keyid_to_addresses = df_filtered.groupby('Key ID')['Normalized Address'].nunique().reset_index()
-conflicting_keyids = keyid_to_addresses[keyid_to_addresses['Normalized Address'] > 1]['Key ID']
-df_filtered['Conflict_Type_B'] = df_filtered['Key ID'].isin(conflicting_keyids)
+email_corp_pans = deductee01_with_email[deductee01_with_email['has_email']]['pan'].unique()
+physical_corp_pans = deductee01_with_email[~deductee01_with_email['has_email']]['pan'].unique()
 
-# Conflict Check C – Same base Key ID has multiple addresses
-df_filtered['KeyID_Base'] = df_filtered['Key ID'].astype(str).str.split('-').str[0]
-basekey_to_addresses = df_filtered.groupby('KeyID_Base')['Normalized Address'].nunique().reset_index()
-conflicting_basekeys = basekey_to_addresses[basekey_to_addresses['Normalized Address'] > 1]['KeyID_Base']
-df_filtered['Conflict_Type_C'] = df_filtered['KeyID_Base'].isin(conflicting_basekeys)
+# === CREATE OUTPUT FOLDERS ===
+email_corp_folder = 'email_corp'
+physical_corp_folder = 'physical_corp'
+os.makedirs(email_corp_folder, exist_ok=True)
+os.makedirs(physical_corp_folder, exist_ok=True)
 
-# Assign Conflict Status
-df_filtered['Status'] = ''
-df_filtered.loc[df_filtered['Conflict_Type_A'], 'Status'] += '❌ Address used by multiple Key IDs. '
-df_filtered.loc[df_filtered['Conflict_Type_B'], 'Status'] += '❌ Key ID has multiple addresses. '
-df_filtered.loc[df_filtered['Conflict_Type_C'], 'Status'] += '❌ Same base Key ID has multiple addresses. '
+# === COPY TO CORP FOLDERS ===
+def get_pdf_name(pan):
+    return f"{pan}_Form16A_{banking_year}.pdf"
 
-# Filter only rows with conflict
-conflict_rows = df_filtered[df_filtered['Status'] != '']
+print("📤 Copying Deductee 01 PDFs to email_corp...")
+for pan in tqdm(email_corp_pans, desc="Email Corp PDFs"):
+    filename = get_pdf_name(pan)
+    if os.path.exists(os.path.join(certificate_folder, filename)):
+        robocopy_copy(certificate_folder, email_corp_folder, filename)
 
-# Drop helper columns
-conflict_rows = conflict_rows.drop(columns=[
-    'Conflict_Type_A', 'Conflict_Type_B', 'Conflict_Type_C',
-    'KeyID_Base', 'KeyID_Address_Combo'
-])
+print("📦 Copying Deductee 01 PDFs to physical_corp...")
+for pan in tqdm(physical_corp_pans, desc="Physical Corp PDFs"):
+    filename = get_pdf_name(pan)
+    if os.path.exists(os.path.join(certificate_folder, filename)):
+        robocopy_copy(certificate_folder, physical_corp_folder, filename)
 
-# Save result
-conflict_rows.to_excel("conflicting_address_keyid_analysis.xlsx", index=False)
-
-print("✅ Final report saved (same Key ID + address rows are removed)")
+print("✅ Deductee 01 PAN PDFs processed and copied.")
