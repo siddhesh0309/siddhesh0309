@@ -1,57 +1,11 @@
-# === PROCESS DEDUCTEE CODE 01 WITH TDQ EMAILS ===
-print("📂 Processing Deductee Code 01 PANs using tdq.xlsx...")
+import subprocess
 
-tdq_file = 'tdq.xlsx'
-tdq_df = pd.read_excel(tdq_file)
+# Define paths
+rbwm_src = os.path.abspath("rbwm")              # local rbwm folder created by your script
+rbs_dst = r"T:\RBS"                              # your network/shared final folder
 
-# Normalize PANs and email columns
-tdq_df['pan'] = tdq_df['pan'].astype(str).str.strip().str.upper()
-
-# Extract email columns
-email_cols = [col for col in tdq_df.columns if str(col).lower().startswith('email address')]
-
-# Get PANs with deductee code 01 from unique_pan_df
-deductee01_df = unique_pan_df[
-    unique_pan_df['deductee_code'].astype(str).str.strip().str.endswith('01')
-]
-
-# Join on PAN
-deductee01_with_email = pd.merge(
-    deductee01_df[['pan']],
-    tdq_df[['pan'] + email_cols],
-    how='left',
-    on='pan'
-)
-
-# Split into corp email/physical based on whether any email is present
-def has_any_email(row):
-    return any(str(row[col]).strip().lower() not in ['', 'nan', 'na'] for col in email_cols)
-
-deductee01_with_email['has_email'] = deductee01_with_email.apply(has_any_email, axis=1)
-
-email_corp_pans = deductee01_with_email[deductee01_with_email['has_email']]['pan'].unique()
-physical_corp_pans = deductee01_with_email[~deductee01_with_email['has_email']]['pan'].unique()
-
-# === CREATE OUTPUT FOLDERS ===
-email_corp_folder = 'email_corp'
-physical_corp_folder = 'physical_corp'
-os.makedirs(email_corp_folder, exist_ok=True)
-os.makedirs(physical_corp_folder, exist_ok=True)
-
-# === COPY TO CORP FOLDERS ===
-def get_pdf_name(pan):
-    return f"{pan}_Form16A_{banking_year}.pdf"
-
-print("📤 Copying Deductee 01 PDFs to email_corp...")
-for pan in tqdm(email_corp_pans, desc="Email Corp PDFs"):
-    filename = get_pdf_name(pan)
-    if os.path.exists(os.path.join(certificate_folder, filename)):
-        robocopy_copy(certificate_folder, email_corp_folder, filename)
-
-print("📦 Copying Deductee 01 PDFs to physical_corp...")
-for pan in tqdm(physical_corp_pans, desc="Physical Corp PDFs"):
-    filename = get_pdf_name(pan)
-    if os.path.exists(os.path.join(certificate_folder, filename)):
-        robocopy_copy(certificate_folder, physical_corp_folder, filename)
-
-print("✅ Deductee 01 PAN PDFs processed and copied.")
+# Robocopy command (multithreaded, fast, silent)
+cmd = f'robocopy "{rbwm_src}" "{rbs_dst}" /E /Z /MT:32 /R:1 /W:1 /COPY:D /NDL /NFL /NP /LOG:NUL'
+print("🚀 Moving rbwm PDFs to final destination using robocopy...")
+subprocess.run(cmd, shell=True)
+print("✅ rbwm PDFs moved to RBS successfully.")
