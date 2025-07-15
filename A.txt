@@ -1,11 +1,12 @@
-import subprocess
+from datetime import datetime
 
-# Define paths
-rbwm_src = os.path.abspath("rbwm")              # local rbwm folder created by your script
-rbs_dst = r"T:\RBS"                              # your network/shared final folder
+today = datetime.today()
+year = today.year
+month = today.month
 
-# Robocopy command (multithreaded, fast, silent)
-cmd = f'robocopy "{rbwm_src}" "{rbs_dst}" /E /Z /MT:32 /R:1 /W:1 /COPY:D /NDL /NFL /NP /LOG:NUL'
-print("🚀 Moving rbwm PDFs to final destination using robocopy...")
-subprocess.run(cmd, shell=True)
-print("✅ rbwm PDFs moved to RBS successfully.")
+if month >= 4:
+    banking_year = f"{year}-{str(year + 1)[-2:]}"
+else:
+    banking_year = f"{year - 1}-{str(year)[-2:]}"
+
+print(f"📅 Banking Year Auto-detected: {banking_year}")
