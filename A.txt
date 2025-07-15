@@ -10,3 +10,22 @@ else:
     banking_year = f"{year - 1}-{str(year)[-2:]}"
 
 print(f"📅 Banking Year Auto-detected: {banking_year}")
+
+
+
+
+# === STEP 1: RENAME PDFs ===
+print(f"🔁 Renaming *_Q4.pdf files to *_Form16A_{banking_year}.pdf...")
+files = [f for f in os.listdir(certificate_folder) if f.endswith("_Q4.pdf")]
+
+with tqdm(total=len(files), desc="Renaming PDFs", unit="file") as pbar:
+    for old_name in files:
+        pan = old_name.replace("_Q4.pdf", "")
+        new_name = f"{pan}_Form16A_{banking_year}.pdf"
+        old_path = os.path.join(certificate_folder, old_name)
+        new_path = os.path.join(certificate_folder, new_name)
+        if not os.path.exists(new_path):
+            os.rename(old_path, new_path)
+        pbar.update(1)
+
+print("✅ All PDFs renamed.\n")
